@@ -1,0 +1,97 @@
+{
+  "project_name": "Wholesale B2B POS System",
+  "theme": "Light",
+  "archetype": "4 (Swiss & High-Contrast) - Customized with Deep Rust Accent",
+  "rationale": "B2B Dashboards require extreme clarity, authority, and data density. Breaking away from typical 'SaaS Blue', a Deep Rust/Terracotta accent introduces a physical, industrial feel suitable for wholesale/inventory domains, while stark white spaces and sharp borders maintain the Swiss brutalist precision required for complex workflows.",
+  "colors": {
+    "background": "#F7F7F6",
+    "surface": "#FFFFFF",
+    "primary": "#9C462C",
+    "primary_hover": "#7A3622",
+    "text_main": "#0A0A0A",
+    "text_muted": "#5C5C5C",
+    "border": "#E5E5E0",
+    "success": "#2D7A4A",
+    "warning": "#B87503",
+    "danger": "#C92A2A"
+  },
+  "typography": {
+    "headings": "Cabinet Grotesk",
+    "body": "Satoshi",
+    "rules": [
+      "NO Inter or Roboto.",
+      "Headings (Cabinet Grotesk) MUST use tight letter spacing: tracking-tight or tracking-tighter.",
+      "Overlines/Labels MUST be Uppercase + Tiny + Wide Spacing (tracking-[0.2em]).",
+      "Maintain strict hierarchy: H1 (text-4xl to 5xl max) for dashboard headers, H4 (text-lg) for widget headers."
+    ]
+  },
+  "layouts": {
+    "admin_dashboard": {
+      "strategy": "The Control Room Grid",
+      "spacing": "Tight (gap-4 or gap-6) to maximize data density.",
+      "container": "Cards/Widgets must be flat solid surfaces with 1px border (border-border). NO muddy shadows. Max radius 8px (rounded-lg) or 0px.",
+      "alignment": "Strict grid hierarchy. Left-align dense tabular data and inputs."
+    },
+    "sales_agent_mobile": {
+      "strategy": "Tactile Bento Grid",
+      "spacing": "Generous touch targets (p-4 to p-6).",
+      "container": "Cards can have a slight lift (shadow-sm) to feel tactile on mobile. Focus on scannability for product catalogs and quick order entry on-site."
+    }
+  },
+  "components": {
+    "buttons": "Square or rounded-md. Solid primary color for main CTA. High contrast hover states.",
+    "tables": "Dense rows. Sticky headers. Use subtle alternating row backgrounds (bg-black/5) or clear 1px bottom borders for scanability.",
+    "forms": "Use Shadcn components but heavily customize. 1px border. Never use native inputs. Active states must have high contrast rings.",
+    "charts": "Recharts or Shadcn Charts. Use primary rust and grayscale tones. Avoid rainbow palettes. Use heat maps for stock levels (Green/Yellow/Red)."
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "rationale": "Best for dense dashboards and developer/B2B tools."
+  },
+  "motion": {
+    "interactions": "Minimalist. Subtle border color changes on hover. No bouncy scales.",
+    "transitions": "Quick opacity fades (0.15s) for modals and dropdowns."
+  },
+  "accessibility": {
+    "contrast": "Ensure all text meets APCA/WCAG AA standards. Primary color buttons must use white text.",
+    "testing": "All interactive and key informational elements MUST include a 'data-testid' attribute (e.g., data-testid='login-submit-button')."
+  },
+  "media": {
+    "image_urls": [
+      {
+        "category": "login_background",
+        "url": "https://images.pexels.com/photos/4487363/pexels-photo-4487363.jpeg",
+        "description": "Bright modern warehouse featuring pallets and storage racks for logistics"
+      },
+      {
+        "category": "product_placeholder_1",
+        "url": "https://images.unsplash.com/photo-1773125929765-99d4d67e831d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHw0fHxjYXJkYm9hcmQlMjBib3hlcyUyMHdob2xlc2FsZXxlbnwwfHx8fDE3NzgyODQ0OTJ8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Pile of cardboard boxes stacked in a storage area"
+      },
+      {
+        "category": "product_placeholder_2",
+        "url": "https://images.unsplash.com/photo-1766040923580-16ad32fae8b4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwzfHxjYXJkYm9hcmQlMjBib3hlcyUyMHdob2xlc2FsZXxlbnwwfHx8fDE3NzgyODQ0OTJ8MA&ixlib=rb-4.1.0&q=85",
+        "description": "A large pile of brown cardboard boxes"
+      },
+      {
+        "category": "avatar_admin",
+        "url": "https://images.unsplash.com/photo-1762522926157-bcc04bf0b10a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3ODIwMTgzNHww&ixlib=rb-4.1.0&q=85",
+        "description": "Professional male headshot"
+      },
+      {
+        "category": "avatar_agent",
+        "url": "https://images.unsplash.com/photo-1769636929388-99eff95d3bf1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3ODIwMTgzNHww&ixlib=rb-4.1.0&q=85",
+        "description": "Professional female headshot"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "1. Setup Shadcn components and Tailwind with the exact colors defined above.",
+    "2. Implement 3 distinct views based on JWT role: Admin (full dashboard), Employee (orders/inventory), Sales Agent (mobile-first product catalog and order entry).",
+    "3. Dashboard Grid: Build a 2x4 KPI grid on the overview. Follow standard B2B SaaS layout with a left sidebar (60% width) for charts and right panel for activity/feeds.",
+    "4. Mobile Interface: For the Sales Agent view, force a mobile-friendly layout (large buttons, bottom navigation, card-based catalog).",
+    "5. Avoid generic Vercel aesthetic. Enforce the Swiss flat design with 1px borders and Deep Rust accents.",
+    "6. Include Recharts for Sales and Inventory analytics.",
+    "7. DO NOT USE placeholder text for images; strictly map from the media.image_urls provided."
+  ]
+}
