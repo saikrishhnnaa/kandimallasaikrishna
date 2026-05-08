@@ -1,48 +1,25 @@
 const express = require('express');
 const router = express.Router();
-
-// Mock routes - replace with actual implementation
+const AuthController = require('../controllers/auth.controller');
+const { validate, registerSchema, loginSchema } = require('../utils/validators');
+const { verifyTokenMiddleware } = require('../middleware/auth.middleware');
 
 /**
  * POST /api/auth/register
  * Register new user
  */
-router.post('/register', (req, res) => {
-  // TODO: Implement user registration with role validation
-  res.status(201).json({
-    message: 'User registration endpoint',
-    expected_fields: ['email', 'password', 'name', 'role']
-  });
-});
+router.post('/register', validate(registerSchema), AuthController.register);
 
 /**
  * POST /api/auth/login
  * User login with role-based response
  */
-router.post('/login', (req, res) => {
-  // TODO: Implement login with JWT token generation
-  res.json({
-    message: 'User login endpoint',
-    expected_fields: ['email', 'password']
-  });
-});
+router.post('/login', validate(loginSchema), AuthController.login);
 
 /**
  * POST /api/auth/logout
  * User logout
  */
-router.post('/logout', (req, res) => {
-  // TODO: Implement logout (token invalidation)
-  res.json({ message: 'Logged out successfully' });
-});
-
-/**
- * POST /api/auth/refresh
- * Refresh JWT token
- */
-router.post('/refresh', (req, res) => {
-  // TODO: Implement token refresh
-  res.json({ message: 'Token refresh endpoint' });
-});
+router.post('/logout', verifyTokenMiddleware, AuthController.logout);
 
 module.exports = router;

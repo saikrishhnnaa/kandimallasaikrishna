@@ -1,55 +1,40 @@
 const express = require('express');
 const router = express.Router();
+const OrderController = require('../controllers/order.controller');
+const { validate, createOrderSchema, updateOrderStatusSchema, processPaymentSchema } = require('../utils/validators');
+const { verifyTokenMiddleware, authorize } = require('../middleware/auth.middleware');
 
-// Order management routes
+// All routes require authentication
+router.use(verifyTokenMiddleware);
 
 /**
  * GET /api/orders
  * List orders (filtered by role)
  */
-router.get('/', (req, res) => {
-  res.json({
-    message: 'List orders',
-    filters: ['status', 'agent_id', 'date_range', 'customer']
-  });
-});
+router.get('/', OrderController.getAllOrders);
 
 /**
  * GET /api/orders/:id
  * Get order details
  */
-router.get('/:id', (req, res) => {
-  res.json({ message: `Get order ${req.params.id}` });
-});
+router.get('/:id', OrderController.getOrderById);
 
 /**
  * POST /api/orders
  * Create new order (Sales Agent/Employee)
  */
-router.post('/', (req, res) => {
-  res.status(201).json({
-    message: 'Create new order',
-    required_fields: ['customer_id', 'items', 'payment_method']
-  });
-});
+router.post('/', authorize('sales_agent', 'employee'), validate(createOrderSchema), OrderController.createOrder);
 
 /**
  * PUT /api/orders/:id
  * Update order status
  */
-router.put('/:id', (req, res) => {
-  res.json({ message: `Update order ${req.params.id}` });
-});
+router.put('/:id', authorize('admin', 'employee'), validate(updateOrderStatusSchema), OrderController.updateOrderStatus);
 
 /**
  * POST /api/orders/:id/payment
  * Process payment
  */
-router.post('/:id/payment', (req, res) => {
-  res.json({
-    message: `Process payment for order ${req.params.id}`,
-    payment_methods: ['cash', 'card', 'digital_wallet', 'check']
-  });
-});
+router.post('/:id/payment', authorize('admin', 'employee', 'sales_agent'), validate(processPaymentSchema), OrderController.processPayment);
 
 module.exports = router;

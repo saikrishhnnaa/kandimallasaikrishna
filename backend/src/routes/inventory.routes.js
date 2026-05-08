@@ -1,53 +1,40 @@
 const express = require('express');
 const router = express.Router();
+const InventoryController = require('../controllers/inventory.controller');
+const { validate, createProductSchema, updateProductSchema, stockAdjustmentSchema } = require('../utils/validators');
+const { verifyTokenMiddleware, authorize } = require('../middleware/auth.middleware');
 
-// Inventory management routes
+// All routes require authentication
+router.use(verifyTokenMiddleware);
 
 /**
  * GET /api/inventory
  * List all products
  */
-router.get('/', (req, res) => {
-  // TODO: Implement pagination, filtering, search
-  res.json({
-    message: 'List all products',
-    filters: ['category', 'status', 'search', 'low_stock']
-  });
-});
+router.get('/', InventoryController.getAllProducts);
 
 /**
  * GET /api/inventory/:id
  * Get product details
  */
-router.get('/:id', (req, res) => {
-  res.json({ message: `Get product ${req.params.id}` });
-});
+router.get('/:id', InventoryController.getProductById);
 
 /**
  * POST /api/inventory
  * Add new product (Admin/Employee)
  */
-router.post('/', (req, res) => {
-  res.status(201).json({
-    message: 'Create new product',
-    required_fields: ['name', 'sku', 'category', 'price', 'stock_quantity']
-  });
-});
+router.post('/', authorize('admin', 'employee'), validate(createProductSchema), InventoryController.createProduct);
 
 /**
  * PUT /api/inventory/:id
  * Update product
  */
-router.put('/:id', (req, res) => {
-  res.json({ message: `Update product ${req.params.id}` });
-});
+router.put('/:id', authorize('admin', 'employee'), validate(updateProductSchema), InventoryController.updateProduct);
 
 /**
  * POST /api/inventory/:id/stock-adjustment
  * Adjust stock levels
  */
-router.post('/:id/stock-adjustment', (req, res) => {
-  res.json({ message: `Adjust stock for product ${req.params.id}` });
-});
+router.post('/:id/stock-adjustment', authorize('admin', 'employee'), validate(stockAdjustmentSchema), InventoryController.adjustStock);
 
 module.exports = router;

@@ -1,53 +1,40 @@
 const express = require('express');
 const router = express.Router();
+const UserController = require('../controllers/user.controller');
+const { validate, createUserSchema, updateUserSchema } = require('../utils/validators');
+const { verifyTokenMiddleware, authorize } = require('../middleware/auth.middleware');
 
-// Mock routes for user management
+// All routes require authentication
+router.use(verifyTokenMiddleware);
 
 /**
  * GET /api/users
  * List all users (Admin only)
  */
-router.get('/', (req, res) => {
-  // TODO: Implement with authentication and authorization
-  res.json({
-    message: 'List all users',
-    filters: ['role', 'status', 'search']
-  });
-});
+router.get('/', authorize('admin'), UserController.getAllUsers);
 
 /**
  * GET /api/users/:id
  * Get user details
  */
-router.get('/:id', (req, res) => {
-  res.json({ message: `Get user ${req.params.id}` });
-});
+router.get('/:id', UserController.getUserById);
 
 /**
  * POST /api/users
  * Create new user (Admin only)
  */
-router.post('/', (req, res) => {
-  res.status(201).json({
-    message: 'Create new user',
-    roles: ['admin', 'employee', 'sales_agent']
-  });
-});
+router.post('/', authorize('admin'), validate(createUserSchema), UserController.createUser);
 
 /**
  * PUT /api/users/:id
  * Update user details
  */
-router.put('/:id', (req, res) => {
-  res.json({ message: `Update user ${req.params.id}` });
-});
+router.put('/:id', validate(updateUserSchema), UserController.updateUser);
 
 /**
  * DELETE /api/users/:id
  * Delete user (Admin only)
  */
-router.delete('/:id', (req, res) => {
-  res.json({ message: `Delete user ${req.params.id}` });
-});
+router.delete('/:id', authorize('admin'), UserController.deleteUser);
 
 module.exports = router;
