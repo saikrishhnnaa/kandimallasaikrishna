@@ -25,9 +25,46 @@ export default function Products() {
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
 
   const load = () => api.get("/products").then((r) => setList(r.data));
   useEffect(() => { load(); }, []);
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllVisible = (filtered) => {
+    setSelectedIds((prev) => {
+      const allSelected = filtered.length > 0 && filtered.every((p) => prev.has(p.id));
+      if (allSelected) {
+        const next = new Set(prev);
+        filtered.forEach((p) => next.delete(p.id));
+        return next;
+      }
+      const next = new Set(prev);
+      filtered.forEach((p) => next.add(p.id));
+      return next;
+    });
+  };
+
+  const bulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} product${ids.length > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    let ok = 0; const errs = [];
+    await Promise.all(ids.map((id) =>
+      api.delete(`/products/${id}`).then(() => { ok += 1; }).catch((e) => errs.push(e?.response?.data?.detail || "error"))
+    ));
+    setSelectedIds(new Set());
+    if (errs.length) toast.error(`${ok} deleted · ${errs.length} failed (${errs[0]})`);
+    else toast.success(`Deleted ${ok} product${ok > 1 ? "s" : ""}`);
+    load();
+  };
 
   const filtered = list.filter((p) =>
     [p.name, p.sku, p.category].join(" ").toLowerCase().includes(search.toLowerCase())
@@ -358,9 +395,32 @@ export default function Products() {
       />
 
       <div className="surface-card overflow-hidden">
+        {selectedIds.size > 0 && (
+          <div className="flex items-center justify-between px-4 py-2 bg-[var(--accent-soft)] border-b border-[var(--border)]" data-testid="bulk-actions-bar">
+            <span className="text-sm font-medium text-[var(--primary)]">
+              {selectedIds.size} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())} data-testid="clear-selection-button">Clear</Button>
+              <Button size="sm" onClick={bulkDelete} className="bg-[var(--danger)] hover:opacity-90 text-white" data-testid="bulk-delete-button">
+                <Trash2 size={14} className="mr-1.5"/>Delete {selectedIds.size}
+              </Button>
+            </div>
+          </div>
+        )}
         <table className="w-full text-sm">
           <thead className="bg-black/[0.02]">
             <tr className="text-left border-b border-[var(--border)]">
+              <th className="px-4 py-3 w-10">
+                <input
+                  type="checkbox"
+                  checked={filtered.length > 0 && filtered.every((p) => selectedIds.has(p.id))}
+                  ref={(el) => { if (el) el.indeterminate = filtered.some((p) => selectedIds.has(p.id)) && !filtered.every((p) => selectedIds.has(p.id)); }}
+                  onChange={() => toggleSelectAllVisible(filtered)}
+                  data-testid="select-all-checkbox"
+                  className="cursor-pointer"
+                />
+              </th>
               {["", "SKU", "Barcode", "Name", "Category", "Stock", "Base price", "Variants", ""].map((h, i) => (
                 <th key={i} className="px-4 py-3 overline text-[var(--text-muted)] font-medium">{h}</th>
               ))}
@@ -369,8 +429,18 @@ export default function Products() {
           <tbody>
             {filtered.map((p) => {
               const primary = (p.images || []).find((i) => i.is_primary) || (p.images || [])[0];
+              const isSelected = selectedIds.has(p.id);
               return (
-              <tr key={p.id} className="border-b border-[var(--border)] last:border-0 hover:bg-black/[0.015]">
+              <tr key={p.id} className={`border-b border-[var(--border)] last:border-0 hover:bg-black/[0.015] ${isSelected ? "bg-[var(--accent-soft)]/40" : ""}`}>
+                <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelect(p.id)}
+                    data-testid={`select-product-${p.sku}`}
+                    className="cursor-pointer"
+                  />
+                </td>
                 <td className="px-4 py-3">
                   {primary ? (
                     <img src={primary.data_url} alt="" className="w-10 h-10 rounded object-cover border border-[var(--border)]" data-testid={`product-thumb-${p.sku}`}/>
@@ -406,7 +476,7 @@ export default function Products() {
               );
             })}
             {!filtered.length && (
-              <tr><td colSpan={9} className="px-4 py-10 text-center text-[var(--text-muted)]">No products yet. Click "New Product" to add one.</td></tr>
+              <tr><td colSpan={10} className="px-4 py-10 text-center text-[var(--text-muted)]">No products yet. Click "New Product" to add one.</td></tr>
             )}
           </tbody>
         </table>
