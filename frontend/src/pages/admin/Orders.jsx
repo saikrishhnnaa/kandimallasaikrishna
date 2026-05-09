@@ -41,7 +41,7 @@ export default function Orders() {
           <p className="overline">Sales</p>
           <h1 className="font-display text-4xl tracking-tighter mt-1">Invoices</h1>
         </div>
-        <Link to="/admin/orders/new" className="px-4 h-10 inline-flex items-center bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white rounded-md text-sm" data-testid="new-order-button">
+        <Link to="/admin/catalog" className="px-4 h-10 inline-flex items-center bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white rounded-md text-sm" data-testid="new-order-button">
           <Plus size={16} className="mr-1.5"/>New Invoice
         </Link>
       </div>

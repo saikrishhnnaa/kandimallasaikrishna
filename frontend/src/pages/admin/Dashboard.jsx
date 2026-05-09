@@ -57,11 +57,11 @@ export default function Dashboard() {
           </p>
         </div>
         <Link
-          to="/admin/orders/new"
+          to="/admin/catalog"
           className="px-4 py-2.5 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white rounded-md text-sm font-medium"
           data-testid="dashboard-new-order"
         >
-          + New Order
+          + New Invoice
         </Link>
       </div>
 

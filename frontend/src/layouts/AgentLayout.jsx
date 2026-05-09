@@ -6,7 +6,7 @@ import { Home, Package, PlusCircle, TrendingUp, LogOut } from "lucide-react";
 const NAV = [
   { to: "/agent", label: "Home", icon: Home, end: true },
   { to: "/agent/catalog", label: "Catalog", icon: Package },
-  { to: "/agent/new-order", label: "New", icon: PlusCircle, accent: true },
+  { to: "/agent/catalog", label: "New", icon: PlusCircle, accent: true },
   { to: "/agent/sales", label: "Sales", icon: TrendingUp },
 ];
 
