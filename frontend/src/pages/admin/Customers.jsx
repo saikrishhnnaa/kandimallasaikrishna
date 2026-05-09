@@ -11,7 +11,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../../components/ui/select";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, X, Wallet } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Wallet, FileText } from "lucide-react";
 
 const empty = {
   name: "", company: "", email: "", phone: "", address: "", tax_id: "",
@@ -185,6 +185,9 @@ export default function Customers() {
                 <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{c.custom_prices?.length || 0}</td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
+                    <Button asChild size="icon" variant="ghost" title="Statement" data-testid={`statement-${c.id}`}>
+                      <a href={`/admin/customers/${c.id}/statement`} target="_blank" rel="noreferrer"><FileText size={14}/></a>
+                    </Button>
                     <Button size="icon" variant="ghost" onClick={() => openCredit(c)} title="Adjust credit" data-testid={`credit-${c.id}`}><Wallet size={14}/></Button>
                     <Button size="icon" variant="ghost" onClick={() => startEdit(c)}><Pencil size={14}/></Button>
                     <Button size="icon" variant="ghost" onClick={() => del(c)}><Trash2 size={14}/></Button>

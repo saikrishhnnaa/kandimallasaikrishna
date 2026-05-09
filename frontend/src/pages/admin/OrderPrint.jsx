@@ -7,6 +7,7 @@ export default function OrderPrint() {
   const { id } = useParams();
   const [order, setOrder] = useState(null);
   const [customer, setCustomer] = useState(null);
+  const [stmt, setStmt] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -14,6 +15,12 @@ export default function OrderPrint() {
       setOrder(o);
       const cs = await api.get(`/customers`).then((r) => r.data);
       setCustomer(cs.find((c) => c.id === o.customer_id) || null);
+      if (o.type === "invoice") {
+        try {
+          const s = await api.get(`/customers/${o.customer_id}/statement`, { params: { exclude_invoice_id: id } }).then((r) => r.data);
+          setStmt(s);
+        } catch (_e) { /* ignore */ }
+      }
     })();
   }, [id]);
 
@@ -124,6 +131,18 @@ export default function OrderPrint() {
                       <span>Balance due</span>
                       <span>{formatCurrency(order.balance_due)}</span>
                     </div>
+                    {stmt && stmt.total_outstanding > 0 && (
+                      <>
+                        <div className="flex justify-between text-sm pt-2 border-t border-[var(--border)]">
+                          <span className="text-[var(--text-muted)]">Previous outstanding ({stmt.open_invoices.length})</span>
+                          <span className="font-mono">{formatCurrency(stmt.total_outstanding)}</span>
+                        </div>
+                        <div className="flex justify-between font-mono text-lg font-semibold pt-1">
+                          <span>Total amount due</span>
+                          <span>{formatCurrency(stmt.total_outstanding + (order.balance_due || 0))}</span>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
               </div>

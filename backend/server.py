@@ -1078,6 +1078,140 @@ async def list_customer_credit(customer_id: str, _: dict = Depends(require_role(
     return await cursor.to_list(200)
 
 
+def _aged_buckets(open_invoices: List[dict], reference_dt: datetime) -> dict:
+    buckets = {"0-30": 0.0, "31-60": 0.0, "61-90": 0.0, "90+": 0.0}
+    for inv in open_invoices:
+        balance = float(inv.get("balance_due") or 0.0)
+        if balance <= 0:
+            continue
+        iso_dt = inv.get("due_date") or inv.get("created_at")
+        try:
+            due = datetime.fromisoformat(iso_dt.replace("Z", "+00:00")) if iso_dt else reference_dt
+        except (ValueError, AttributeError):
+            due = reference_dt
+        days = (reference_dt - due).days
+        if days <= 30:
+            buckets["0-30"] += balance
+        elif days <= 60:
+            buckets["31-60"] += balance
+        elif days <= 90:
+            buckets["61-90"] += balance
+        else:
+            buckets["90+"] += balance
+    return {k: round(v, 2) for k, v in buckets.items()}
+
+
+@api_router.get("/customers/{customer_id}/statement")
+async def customer_statement(
+    customer_id: str,
+    exclude_invoice_id: Optional[str] = None,
+    _: dict = Depends(require_role("admin", "employee")),
+):
+    customer = await db.customers.find_one({"id": customer_id}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    inv_q = {
+        "customer_id": customer_id,
+        "type": "invoice",
+        "$or": [{"deleted_at": None}, {"deleted_at": {"$exists": False}}],
+    }
+    invoices = await db.orders.find(inv_q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    if exclude_invoice_id:
+        invoices_for_balance = [i for i in invoices if i["id"] != exclude_invoice_id]
+    else:
+        invoices_for_balance = invoices
+
+    payments = await db.payments.find({"customer_id": customer_id}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+    total_invoiced = sum(float(i.get("total") or 0) for i in invoices_for_balance)
+    total_paid = sum(float(i.get("amount_paid") or 0) for i in invoices_for_balance)
+    total_outstanding = sum(float(i.get("balance_due") or 0) for i in invoices_for_balance)
+    open_invoices = [i for i in invoices_for_balance if i.get("payment_status") != "paid"]
+
+    now = now_utc()
+    aged = _aged_buckets(open_invoices, now)
+
+    trade_ins: List[dict] = []
+    for inv in invoices:
+        for ti in (inv.get("trade_ins") or []):
+            trade_ins.append({**ti, "invoice_number": inv["number"], "invoice_date": inv["created_at"]})
+
+    return {
+        "customer": customer,
+        "as_of": iso(now),
+        "invoices": invoices_for_balance,
+        "open_invoices": open_invoices,
+        "payments": payments[:20],
+        "trade_ins": trade_ins[:20],
+        "total_invoiced": round(total_invoiced, 2),
+        "total_paid": round(total_paid, 2),
+        "total_outstanding": round(total_outstanding, 2),
+        "credit_balance": float(customer.get("credit_balance") or 0),
+        "credit_limit": float(customer.get("credit_limit") or 0),
+        "aged_buckets": aged,
+        "exclude_invoice_id": exclude_invoice_id,
+    }
+
+
+def _render_statement_html(stmt: dict) -> str:
+    c = stmt["customer"]
+    rows = "".join(
+        f"<tr><td style='padding:8px;border-bottom:1px solid #E5E5E0;font-family:monospace;font-size:11px'>{i['number']}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0;font-size:11px'>{(i.get('due_date') or i['created_at'])[:10]}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0;text-align:right;font-family:monospace'>${float(i.get('total') or 0):.2f}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0;text-align:right;font-family:monospace'>${float(i.get('amount_paid') or 0):.2f}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0;text-align:right;font-family:monospace;color:#9C462C'>${float(i.get('balance_due') or 0):.2f}</td></tr>"
+        for i in stmt["open_invoices"]
+    ) or "<tr><td colspan='5' style='padding:18px;text-align:center;color:#5C5C5C'>No open invoices.</td></tr>"
+    aged = stmt["aged_buckets"]
+    return f"""
+    <div style="font-family:Helvetica,Arial,sans-serif;max-width:680px;margin:auto;padding:32px;background:#fff;border:1px solid #E5E5E0;border-radius:8px">
+      <p style="text-transform:uppercase;letter-spacing:0.2em;font-size:11px;color:#9C462C;margin:0">Statement</p>
+      <h1 style="font-size:32px;letter-spacing:-0.02em;margin:6px 0 4px">{c.get('company') or c.get('name','')}</h1>
+      <p style="color:#5C5C5C;margin:0;font-size:12px">As of {stmt['as_of'][:10]}</p>
+      <div style="display:flex;gap:24px;margin-top:24px;background:#F7F7F6;padding:16px;border-radius:6px">
+        <div style="flex:1"><p style="text-transform:uppercase;letter-spacing:0.2em;font-size:10px;color:#5C5C5C;margin:0">Outstanding</p><p style="font-size:24px;margin:4px 0;color:#9C462C;font-family:monospace">${stmt['total_outstanding']:.2f}</p></div>
+        <div style="flex:1"><p style="text-transform:uppercase;letter-spacing:0.2em;font-size:10px;color:#5C5C5C;margin:0">Total invoiced</p><p style="font-size:18px;margin:4px 0;font-family:monospace">${stmt['total_invoiced']:.2f}</p></div>
+        <div style="flex:1"><p style="text-transform:uppercase;letter-spacing:0.2em;font-size:10px;color:#5C5C5C;margin:0">Available credit</p><p style="font-size:18px;margin:4px 0;color:#2D7A4A;font-family:monospace">${stmt['credit_balance']:.2f}</p></div>
+      </div>
+      <h3 style="font-size:14px;margin:24px 0 8px;letter-spacing:-0.01em">Open invoices</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:#F7F7F6">
+          <th style="text-align:left;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Number</th>
+          <th style="text-align:left;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Due</th>
+          <th style="text-align:right;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Total</th>
+          <th style="text-align:right;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Paid</th>
+          <th style="text-align:right;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Balance</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+      <h3 style="font-size:14px;margin:24px 0 8px;letter-spacing:-0.01em">Aged outstanding</h3>
+      <div style="display:flex;gap:12px;font-size:12px;font-family:monospace">
+        <div style="flex:1;padding:10px;background:#F7F7F6;border-radius:4px">0-30 days<br/><strong>${aged['0-30']:.2f}</strong></div>
+        <div style="flex:1;padding:10px;background:#F7F7F6;border-radius:4px">31-60 days<br/><strong>${aged['31-60']:.2f}</strong></div>
+        <div style="flex:1;padding:10px;background:#F7F7F6;border-radius:4px">61-90 days<br/><strong>${aged['61-90']:.2f}</strong></div>
+        <div style="flex:1;padding:10px;background:#F5E7E0;border-radius:4px;color:#9C462C">90+ days<br/><strong>${aged['90+']:.2f}</strong></div>
+      </div>
+      <p style="color:#5C5C5C;font-size:11px;margin-top:32px;border-top:1px solid #E5E5E0;padding-top:16px">Please remit payment for outstanding balances at your earliest convenience.</p>
+    </div>"""
+
+
+@api_router.post("/customers/{customer_id}/statement/email")
+async def email_statement(customer_id: str, current: dict = Depends(require_role("admin", "employee"))):
+    stmt = await customer_statement(customer_id, None, current)
+    c = stmt["customer"]
+    to = (c.get("email") or "").strip()
+    if not to:
+        raise HTTPException(status_code=400, detail="Customer has no email on file")
+    if not RESEND_API_KEY:
+        raise HTTPException(status_code=503, detail="Email service not configured. Set RESEND_API_KEY in backend/.env.")
+    html = _render_statement_html(stmt)
+    sent = await send_email(to, f"Account statement — {c.get('company') or c.get('name','')}", html)
+    if not sent:
+        raise HTTPException(status_code=502, detail="Failed to send")
+    return {"ok": True, "to": to}
+
+
 # -----------------------------------------------------------------------------
 # Stock movements log
 # -----------------------------------------------------------------------------

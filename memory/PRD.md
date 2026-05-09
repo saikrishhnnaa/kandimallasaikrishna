@@ -74,6 +74,13 @@
 - **Pricing preview** (`POST /api/pricing/preview`) accepts `trade_ins` and `credit_applied`, returns `available_credit` so the form can show real-time totals.
 - Customer page: new "Credit balance" column + per-row Wallet button to adjust credit.
 
+### v1.4 — Customer Statement & Previous Dues (2026-05-09)
+- **Customer Statement** — `GET /api/customers/{id}/statement` aggregates all open invoices, total outstanding, total invoiced, paid, available credit, recent payments, recent trade-ins, and aged buckets (0-30 / 31-60 / 61-90 / 90+ days).
+- **Statement page** — `/admin/customers/:id/statement` with print-ready layout, "Print / Save as PDF" + "Email" buttons. Email goes through Resend with a styled HTML template.
+- **Previous outstanding panel** on every invoice's OrderDetail page — shows the customer's other open invoices, total previous outstanding, grand total owed (this invoice + previous), and a link to the full statement.
+- **Previous outstanding line** on the printable invoice PDF — appears in the totals block as "Previous outstanding (N)" + "Total amount due" so customers see the full picture on a single page.
+- Customers list — added "Statement" (FileText) icon button per row to open the statement in a new tab.
+
 ## Backlog (Prioritised)
 - **P1** Print-friendly invoice / PDF download
 - **P1** Customer portal (their own quotes/invoices) — paves way for website integration

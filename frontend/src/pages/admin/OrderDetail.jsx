@@ -22,11 +22,18 @@ export default function OrderDetail() {
   const [order, setOrder] = useState(null);
   const [payments, setPayments] = useState([]);
   const [audit, setAudit] = useState([]);
+  const [stmt, setStmt] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
   const [pay, setPay] = useState({ amount: "", method: "cash", reference: "", notes: "" });
 
   const load = () => {
-    api.get(`/orders/${id}`).then((r) => setOrder(r.data));
+    api.get(`/orders/${id}`).then((r) => {
+      setOrder(r.data);
+      if (r.data.type === "invoice" && (user.role === "admin" || user.role === "employee")) {
+        api.get(`/customers/${r.data.customer_id}/statement`, { params: { exclude_invoice_id: id } })
+          .then((s) => setStmt(s.data)).catch(() => {});
+      }
+    });
     api.get(`/payments`, { params: { order_id: id } }).then((r) => setPayments(r.data));
     if (user.role === "admin" || user.role === "employee") {
       api.get(`/orders/${id}/audit`).then((r) => setAudit(r.data)).catch(() => {});
@@ -167,6 +174,34 @@ export default function OrderDetail() {
         <Stat label="Paid" value={formatCurrency(order.amount_paid)} />
         <Stat label="Balance due" value={formatCurrency(order.balance_due)} accent={order.balance_due > 0}/>
       </div>
+
+      {order.type === "invoice" && stmt && stmt.total_outstanding > 0 && (
+        <div className="surface-card p-5 mb-4 border-l-4 border-l-[var(--primary)]" data-testid="previous-dues">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <p className="overline text-[var(--primary)]">Previous outstanding</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">{stmt.open_invoices.length} other open invoice(s) for this customer</p>
+            </div>
+            <div className="text-right">
+              <div className="font-display text-2xl tracking-tight">{formatCurrency(stmt.total_outstanding)}</div>
+              <div className="text-xs text-[var(--text-muted)] font-mono mt-0.5">
+                Grand total owed: <span className="text-[var(--text)] font-medium">{formatCurrency(stmt.total_outstanding + (order.balance_due || 0))}</span>
+              </div>
+            </div>
+          </div>
+          {stmt.open_invoices.length > 0 && (
+            <ul className="mt-3 space-y-1">
+              {stmt.open_invoices.slice(0, 4).map((i) => (
+                <li key={i.id} className="flex justify-between text-xs">
+                  <span className="font-mono text-[var(--text-muted)]">{i.number} · due {formatDate(i.due_date)}</span>
+                  <span className="font-mono">{formatCurrency(i.balance_due)}</span>
+                </li>
+              ))}
+              <li className="mt-2"><Link to={`/admin/customers/${order.customer_id}/statement`} target="_blank" className="text-xs text-[var(--primary)] hover:underline">View full statement →</Link></li>
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="surface-card overflow-hidden mb-4">
         <table className="w-full text-sm">

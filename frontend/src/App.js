@@ -15,6 +15,7 @@ import OrderNew from "./pages/admin/OrderNew";
 import OrderPrint from "./pages/admin/OrderPrint";
 import StockMovements from "./pages/admin/StockMovements";
 import Integration from "./pages/admin/Integration";
+import CustomerStatement from "./pages/admin/CustomerStatement";
 import Users from "./pages/admin/Users";
 import Reports from "./pages/admin/Reports";
 import AgentHome from "./pages/agent/AgentHome";
@@ -66,6 +67,14 @@ function App() {
             element={
               <ProtectedRoute roles={["admin", "employee"]}>
                 <OrderPrint />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/customers/:id/statement"
+            element={
+              <ProtectedRoute roles={["admin", "employee"]}>
+                <CustomerStatement />
               </ProtectedRoute>
             }
           />
