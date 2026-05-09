@@ -193,9 +193,9 @@ export default function OrderForm() {
         <h1 className="font-display text-4xl tracking-tighter">
           {isEdit ? `Edit ${originalOrder?.number || "…"}` : "New Invoice"}
         </h1>
-        {isEdit && !isAgent && (
+        {isEdit && (
           <Link
-            to="/admin/catalog"
+            to={isAgent ? "/agent/catalog" : "/admin/catalog"}
             className="inline-flex items-center text-sm h-10 px-3 rounded-md border border-[var(--border)] hover:bg-black/5"
             data-testid="goto-catalog-link"
           >
@@ -253,15 +253,17 @@ export default function OrderForm() {
             <div className="flex items-center justify-between mb-4">
               <p className="overline">Line items</p>
               <div className="flex items-center gap-2">
-                {isEdit && !isAgent && (
+                {isEdit && (
                   <Button
                     variant="outline" size="sm"
                     onClick={() => {
                       try {
                         sessionStorage.setItem("pos_addTo_invoice", id);
                         sessionStorage.setItem("pos_addTo_invoice_number", originalOrder?.number || "");
+                        sessionStorage.setItem("pos_addTo_invoice_role", isAgent ? "agent" : "admin");
                       } catch (_) { /* ignore */ }
-                      nav(`/admin/catalog?addTo=${id}`);
+                      const path = isAgent ? "/agent/catalog" : "/admin/catalog";
+                      nav(`${path}?addTo=${id}`);
                     }}
                     data-testid="order-add-from-catalog-button"
                     className="border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--accent-soft)]"

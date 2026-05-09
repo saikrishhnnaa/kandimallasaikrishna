@@ -194,6 +194,8 @@ export default function Catalog() {
       if (!cart.length) return toast.error("Cart is empty");
       const items = cart.map((c) => ({ product_id: c.product_id, variant_id: c.variant_id || null, quantity: Number(c.quantity) }));
       // Clear context + transient cart, then return to edit invoice with merge payload
+      let returnRole = "admin";
+      try { returnRole = sessionStorage.getItem("pos_addTo_invoice_role") || (isAgent ? "agent" : "admin"); } catch (_) { /* ignore */ }
       try {
         localStorage.removeItem(cartStorageKey);
         localStorage.removeItem(`${cartStorageKey}_customer`);
@@ -201,7 +203,8 @@ export default function Catalog() {
       exitAddToMode();
       setCart([]);
       const merge = encodeURIComponent(JSON.stringify(items));
-      nav(`/admin/orders/${addToInvoiceId}/edit?merge=${merge}`);
+      const basePath = returnRole === "agent" ? "/agent/orders" : "/admin/orders";
+      nav(`${basePath}/${addToInvoiceId}/edit?merge=${merge}`);
       return;
     }
     if (!customerId) return toast.error("Pick a customer");
@@ -293,7 +296,13 @@ export default function Catalog() {
             <span className="font-mono font-medium">{addToInvoiceNumber || addToInvoiceId.slice(0, 8)}</span>
             <span className="text-[var(--text-muted)]"> · they'll be merged into the invoice when you tap "Add to invoice".</span>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => { exitAddToMode(); nav(`/admin/orders/${addToInvoiceId}/edit`); }} data-testid="addto-cancel">
+          <Button variant="ghost" size="sm" onClick={() => {
+            let returnRole = "admin";
+            try { returnRole = sessionStorage.getItem("pos_addTo_invoice_role") || (isAgent ? "agent" : "admin"); } catch (_) { /* ignore */ }
+            exitAddToMode();
+            const basePath = returnRole === "agent" ? "/agent/orders" : "/admin/orders";
+            nav(`${basePath}/${addToInvoiceId}/edit`);
+          }} data-testid="addto-cancel">
             Cancel
           </Button>
         </div>
