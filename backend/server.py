@@ -296,6 +296,7 @@ class Customer(BaseModel):
     address: str = ""
     tax_id: str = ""
     credit_limit: float = 0.0
+    credit_balance: float = 0.0
     payment_terms_days: int = 30
     custom_prices: List[CustomerPrice] = []
     notes: str = ""
@@ -344,6 +345,27 @@ class OrderItem(BaseModel):
     line_total: float
 
 
+class TradeInIn(BaseModel):
+    description: str
+    quantity: int = 1
+    unit_value: float
+    sku: str = ""
+    product_id: Optional[str] = None
+    restock: bool = False
+    note: str = ""
+
+
+class TradeIn(BaseModel):
+    description: str
+    quantity: int
+    unit_value: float
+    line_total: float
+    sku: str = ""
+    product_id: Optional[str] = None
+    restock: bool = False
+    note: str = ""
+
+
 OrderType = Literal["quote", "order", "invoice"]
 OrderStatus = Literal["draft", "confirmed", "cancelled", "fulfilled"]
 PayStatus = Literal["unpaid", "partial", "paid"]
@@ -354,6 +376,16 @@ class OrderCreate(BaseModel):
     items: List[OrderItemIn]
     type: OrderType = "order"
     notes: str = ""
+    trade_ins: List[TradeInIn] = []
+    credit_applied: float = 0.0
+
+
+class OrderUpdate(BaseModel):
+    customer_id: Optional[str] = None
+    items: Optional[List[OrderItemIn]] = None
+    notes: Optional[str] = None
+    trade_ins: Optional[List[TradeInIn]] = None
+    credit_applied: Optional[float] = None
 
 
 class OrderOut(BaseModel):
@@ -363,6 +395,9 @@ class OrderOut(BaseModel):
     customer_id: str
     customer_name: str
     items: List[OrderItem]
+    trade_ins: List[TradeIn] = []
+    trade_in_total: float = 0.0
+    credit_applied: float = 0.0
     subtotal: float
     tax: float
     total: float
@@ -379,6 +414,7 @@ class OrderOut(BaseModel):
     notes: str = ""
     created_at: str
     converted_from: Optional[str] = None
+    deleted_at: Optional[str] = None
 
 
 class PaymentCreate(BaseModel):
@@ -616,44 +652,109 @@ def _prefix_for(t: str) -> str:
     return {"quote": "QT", "order": "SO", "invoice": "INV"}[t]
 
 
+async def _compute_lines(items_in, customer: dict) -> tuple:
+    """Resolve unit prices and line totals for products."""
+    items: List[dict] = []
+    subtotal = 0.0
+    for it in items_in or []:
+        d = it if isinstance(it, dict) else it.model_dump()
+        product = await db.products.find_one({"id": d["product_id"]}, {"_id": 0})
+        if not product:
+            raise HTTPException(status_code=400, detail=f"Product {d['product_id']} not found")
+        qty = int(d["quantity"])
+        if qty <= 0:
+            raise HTTPException(status_code=400, detail="Quantity must be positive")
+        unit_price = await resolve_price(product, customer, qty)
+        line_total = round(unit_price * qty, 2)
+        items.append({
+            "product_id": product["id"],
+            "sku": product["sku"],
+            "name": product["name"],
+            "quantity": qty,
+            "unit_price": unit_price,
+            "line_total": line_total,
+        })
+        subtotal += line_total
+    return items, round(subtotal, 2)
+
+
+def _compute_trade_ins(trade_ins_in) -> tuple:
+    out: List[dict] = []
+    total = 0.0
+    for ti in trade_ins_in or []:
+        d = ti if isinstance(ti, dict) else ti.model_dump()
+        qty = max(int(d.get("quantity") or 1), 1)
+        unit = float(d.get("unit_value") or 0.0)
+        line = round(unit * qty, 2)
+        out.append({
+            "description": d.get("description", ""),
+            "quantity": qty,
+            "unit_value": unit,
+            "line_total": line,
+            "sku": d.get("sku", ""),
+            "product_id": d.get("product_id"),
+            "restock": bool(d.get("restock", False)),
+            "note": d.get("note", ""),
+        })
+        total += line
+    return out, round(total, 2)
+
+
+async def _audit(order_id: str, action: str, current: dict, changes: dict) -> None:
+    await db.order_audit.insert_one({
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "action": action,
+        "changes": changes,
+        "by_id": current.get("id", "system"),
+        "by_name": current.get("name", "System"),
+        "at": iso(now_utc()),
+    })
+
+
+async def _adjust_customer_credit(customer_id: str, delta: float, current: dict, reason: str, ref: str) -> None:
+    if delta == 0:
+        return
+    await db.customers.update_one({"id": customer_id}, {"$inc": {"credit_balance": float(delta)}})
+    await db.customer_credit_log.insert_one({
+        "id": str(uuid.uuid4()),
+        "customer_id": customer_id,
+        "delta": float(delta),
+        "reason": reason,
+        "reference": ref,
+        "by_id": current.get("id", "system"),
+        "by_name": current.get("name", "System"),
+        "at": iso(now_utc()),
+    })
+
+
 async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
     customer = await db.customers.find_one({"id": body.customer_id}, {"_id": 0})
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     if not body.items:
         raise HTTPException(status_code=400, detail="At least one item required")
-    items: List[dict] = []
-    subtotal = 0.0
-    for it in body.items:
-        product = await db.products.find_one({"id": it.product_id}, {"_id": 0})
-        if not product:
-            raise HTTPException(status_code=400, detail=f"Product {it.product_id} not found")
-        if it.quantity <= 0:
-            raise HTTPException(status_code=400, detail="Quantity must be positive")
-        unit_price = await resolve_price(product, customer, it.quantity)
-        line_total = round(unit_price * it.quantity, 2)
-        items.append({
-            "product_id": product["id"],
-            "sku": product["sku"],
-            "name": product["name"],
-            "quantity": it.quantity,
-            "unit_price": unit_price,
-            "line_total": line_total,
-        })
-        subtotal += line_total
-    subtotal = round(subtotal, 2)
-    total = subtotal  # no tax for now
+    items, subtotal = await _compute_lines(body.items, customer)
+    trade_ins, trade_in_total = _compute_trade_ins(body.trade_ins)
+    credit_applied = round(max(0.0, float(body.credit_applied or 0.0)), 2)
+    available_credit = float(customer.get("credit_balance") or 0.0)
+    if credit_applied > available_credit + 0.001:
+        raise HTTPException(status_code=400, detail=f"Customer has only {available_credit:.2f} credit available")
+    total = round(max(subtotal - trade_in_total - credit_applied, 0.0), 2)
     commission_rate = float(current.get("commission_rate") or 0.0) if current["role"] == "sales_agent" else 0.0
     commission = round(total * commission_rate / 100.0, 2)
     terms = int(customer.get("payment_terms_days", 30))
     due_date = iso(now_utc() + timedelta(days=terms)) if body.type == "invoice" else None
-    doc = {
+    return {
         "id": str(uuid.uuid4()),
         "number": await _next_number(_prefix_for(body.type)),
         "type": body.type,
         "customer_id": customer["id"],
         "customer_name": customer.get("company") or customer["name"],
         "items": items,
+        "trade_ins": trade_ins,
+        "trade_in_total": trade_in_total,
+        "credit_applied": credit_applied,
         "subtotal": subtotal,
         "tax": 0.0,
         "total": total,
@@ -670,8 +771,8 @@ async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
         "notes": body.notes,
         "created_at": iso(now_utc()),
         "converted_from": None,
+        "deleted_at": None,
     }
-    return doc
 
 
 async def _check_stock(items: List[dict]) -> None:
@@ -696,6 +797,12 @@ async def _apply_restocks(items: List[dict], reference: str, user: dict, reason:
         await apply_stock_change(it["product_id"], int(it["quantity"]), reason, reference, user)
 
 
+async def _apply_trade_in_restocks(trade_ins: List[dict], reference: str, user: dict, sign: int = 1) -> None:
+    for ti in trade_ins:
+        if ti.get("restock") and ti.get("product_id"):
+            await apply_stock_change(ti["product_id"], sign * int(ti["quantity"]), "trade_in", reference, user)
+
+
 @api_router.post("/orders", response_model=OrderOut)
 async def create_order(body: OrderCreate, current: dict = Depends(get_current_user)):
     if current["role"] not in ("admin", "employee", "sales_agent"):
@@ -706,6 +813,13 @@ async def create_order(body: OrderCreate, current: dict = Depends(get_current_us
     await db.orders.insert_one(doc)
     if doc["type"] in ("order", "invoice"):
         await _apply_decrements(doc["items"], doc["number"], current)
+        await _apply_trade_in_restocks(doc["trade_ins"], doc["number"], current, sign=+1)
+        if doc["credit_applied"] > 0:
+            await _adjust_customer_credit(
+                doc["customer_id"], -doc["credit_applied"], current,
+                "credit_applied_to_order", doc["number"],
+            )
+    await _audit(doc["id"], "created", current, {"type": doc["type"], "total": doc["total"]})
     doc.pop("_id", None)
     return doc
 
@@ -720,6 +834,8 @@ def _agent_filter(current: dict) -> dict:
 async def list_orders(
     type: Optional[OrderType] = None,
     customer_id: Optional[str] = None,
+    include_deleted: bool = False,
+    deleted_only: bool = False,
     current: dict = Depends(get_current_user),
 ):
     q: dict = _agent_filter(current)
@@ -727,6 +843,10 @@ async def list_orders(
         q["type"] = type
     if customer_id:
         q["customer_id"] = customer_id
+    if deleted_only:
+        q["deleted_at"] = {"$ne": None}
+    elif not include_deleted:
+        q["$or"] = [{"deleted_at": None}, {"deleted_at": {"$exists": False}}]
     cursor = db.orders.find(q, {"_id": 0}).sort("created_at", -1)
     return await cursor.to_list(2000)
 
@@ -740,11 +860,99 @@ async def get_order(order_id: str, current: dict = Depends(get_current_user)):
     return doc
 
 
+@api_router.get("/orders/{order_id}/audit")
+async def get_order_audit(order_id: str, _: dict = Depends(require_role("admin", "employee"))):
+    cursor = db.order_audit.find({"order_id": order_id}, {"_id": 0}).sort("at", -1).limit(200)
+    return await cursor.to_list(200)
+
+
+@api_router.patch("/orders/{order_id}", response_model=OrderOut)
+async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends(require_role("admin", "employee"))):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Cannot edit a deleted order")
+    is_active_stock = order["type"] in ("order", "invoice")
+    customer_id = body.customer_id or order["customer_id"]
+    customer = await db.customers.find_one({"id": customer_id}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    # Items
+    items_in = body.items if body.items is not None else order["items"]
+    new_items, subtotal = await _compute_lines(items_in, customer)
+
+    # Trade-ins
+    if body.trade_ins is not None:
+        new_trade_ins, trade_in_total = _compute_trade_ins(body.trade_ins)
+    else:
+        new_trade_ins = order.get("trade_ins", [])
+        trade_in_total = float(order.get("trade_in_total", 0.0))
+
+    # Credit
+    new_credit = float(body.credit_applied if body.credit_applied is not None else order.get("credit_applied", 0.0))
+    new_credit = round(max(0.0, new_credit), 2)
+    old_credit = float(order.get("credit_applied", 0.0))
+    delta_credit_applied = new_credit - old_credit
+    if delta_credit_applied > 0:
+        avail = float(customer.get("credit_balance") or 0.0)
+        if delta_credit_applied > avail + 0.001:
+            raise HTTPException(status_code=400, detail=f"Insufficient credit (need {delta_credit_applied:.2f}, have {avail:.2f})")
+
+    # Stock reconciliation: restock OLD items, then check + decrement NEW items
+    if is_active_stock:
+        # Restock old items
+        await _apply_restocks(order["items"], order["number"], current, "order_edited")
+        # Reverse old trade-in restocks
+        await _apply_trade_in_restocks(order.get("trade_ins", []), order["number"], current, sign=-1)
+        # Check new
+        await _check_stock(new_items)
+        # Decrement new
+        for it in new_items:
+            await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_edited", order["number"], current)
+        # Apply new trade-in restocks
+        await _apply_trade_in_restocks(new_trade_ins, order["number"], current, sign=+1)
+
+    # Adjust customer credit
+    if delta_credit_applied != 0:
+        await _adjust_customer_credit(customer_id, -delta_credit_applied, current, "credit_adjusted_on_edit", order["number"])
+
+    total = round(max(subtotal - trade_in_total - new_credit, 0.0), 2)
+    amount_paid = float(order.get("amount_paid", 0.0))
+    balance_due = round(max(total - amount_paid, 0.0), 2) if order["type"] == "invoice" else 0.0
+    pay_status = "paid" if balance_due <= 0.001 and amount_paid > 0 else ("partial" if amount_paid > 0 else "unpaid")
+    commission_rate = float(order.get("agent_commission_rate", 0.0))
+    commission = round(total * commission_rate / 100.0, 2)
+
+    update = {
+        "customer_id": customer["id"],
+        "customer_name": customer.get("company") or customer["name"],
+        "items": new_items,
+        "trade_ins": new_trade_ins,
+        "trade_in_total": trade_in_total,
+        "credit_applied": new_credit,
+        "subtotal": subtotal,
+        "total": total,
+        "balance_due": balance_due,
+        "payment_status": pay_status,
+        "agent_commission": commission,
+        "notes": body.notes if body.notes is not None else order.get("notes", ""),
+    }
+    res = await db.orders.find_one_and_update(
+        {"id": order_id}, {"$set": update}, return_document=True, projection={"_id": 0}
+    )
+    await _audit(order_id, "edited", current, {"updated_fields": list(update.keys()), "new_total": total})
+    return res
+
+
 @api_router.post("/orders/{order_id}/convert", response_model=OrderOut)
 async def convert_order(order_id: str, target: OrderType, current: dict = Depends(get_current_user)):
     src = await db.orders.find_one({"id": order_id, **_agent_filter(current)}, {"_id": 0})
     if not src:
         raise HTTPException(status_code=404, detail="Order not found")
+    if src.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Cannot convert a deleted order")
     if src["type"] == target:
         raise HTTPException(status_code=400, detail="Already this type")
     if src["type"] == "quote" and target not in ("order", "invoice"):
@@ -760,6 +968,7 @@ async def convert_order(order_id: str, target: OrderType, current: dict = Depend
     new_doc["status"] = "confirmed"
     new_doc["created_at"] = iso(now_utc())
     new_doc["converted_from"] = src["id"]
+    new_doc["deleted_at"] = None
     if target == "invoice":
         new_doc["balance_due"] = new_doc["total"]
         new_doc["payment_status"] = "unpaid"
@@ -769,8 +978,15 @@ async def convert_order(order_id: str, target: OrderType, current: dict = Depend
         await _check_stock(new_doc["items"])
         await db.orders.insert_one(new_doc)
         await _apply_decrements(new_doc["items"], new_doc["number"], current)
+        await _apply_trade_in_restocks(new_doc.get("trade_ins", []), new_doc["number"], current, sign=+1)
+        if float(new_doc.get("credit_applied") or 0.0) > 0:
+            await _adjust_customer_credit(
+                new_doc["customer_id"], -float(new_doc["credit_applied"]), current,
+                "credit_applied_to_order", new_doc["number"],
+            )
     else:
         await db.orders.insert_one(new_doc)
+    await _audit(new_doc["id"], f"converted_from_{src['type']}", current, {"source_id": src["id"]})
     new_doc.pop("_id", None)
     return new_doc
 
@@ -780,10 +996,86 @@ async def delete_order(order_id: str, current: dict = Depends(require_role("admi
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Already deleted")
     if order["type"] in ("order", "invoice"):
         await _apply_restocks(order["items"], order["number"], current, "order_deleted")
+        await _apply_trade_in_restocks(order.get("trade_ins", []), order["number"], current, sign=-1)
+        if float(order.get("credit_applied") or 0.0) > 0:
+            await _adjust_customer_credit(
+                order["customer_id"], float(order["credit_applied"]), current,
+                "credit_refund_on_delete", order["number"],
+            )
+    await db.orders.update_one({"id": order_id}, {"$set": {"deleted_at": iso(now_utc())}})
+    await _audit(order_id, "deleted", current, {})
+    return {"ok": True, "deleted_at": iso(now_utc())}
+
+
+@api_router.post("/orders/{order_id}/restore", response_model=OrderOut)
+async def restore_order(order_id: str, current: dict = Depends(require_role("admin"))):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not order.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Order is not deleted")
+    if order["type"] in ("order", "invoice"):
+        await _check_stock(order["items"])
+        await _apply_decrements(order["items"], order["number"], current)
+        await _apply_trade_in_restocks(order.get("trade_ins", []), order["number"], current, sign=+1)
+        if float(order.get("credit_applied") or 0.0) > 0:
+            avail = float((await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0, "credit_balance": 1}) or {}).get("credit_balance", 0.0))
+            if avail + 0.001 < float(order["credit_applied"]):
+                raise HTTPException(status_code=400, detail=f"Insufficient credit to re-apply ({avail:.2f} available)")
+            await _adjust_customer_credit(
+                order["customer_id"], -float(order["credit_applied"]), current,
+                "credit_reapplied_on_restore", order["number"],
+            )
+    res = await db.orders.find_one_and_update(
+        {"id": order_id}, {"$set": {"deleted_at": None}}, return_document=True, projection={"_id": 0}
+    )
+    await _audit(order_id, "restored", current, {})
+    return res
+
+
+@api_router.delete("/orders/{order_id}/purge")
+async def purge_order(order_id: str, _: dict = Depends(require_role("admin"))):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not order.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Soft-delete the order first")
     await db.orders.delete_one({"id": order_id})
     return {"ok": True}
+
+
+# -----------------------------------------------------------------------------
+# Customer credit
+# -----------------------------------------------------------------------------
+class CreditAdjust(BaseModel):
+    delta: float
+    reason: str = "manual_adjustment"
+    note: str = ""
+
+
+@api_router.post("/customers/{customer_id}/credit", response_model=Customer)
+async def adjust_customer_credit(customer_id: str, body: CreditAdjust, current: dict = Depends(require_role("admin", "employee"))):
+    if body.delta == 0:
+        raise HTTPException(status_code=400, detail="Delta cannot be zero")
+    customer = await db.customers.find_one({"id": customer_id}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    new_balance = float(customer.get("credit_balance") or 0.0) + float(body.delta)
+    if new_balance < -0.001:
+        raise HTTPException(status_code=400, detail="Cannot go below zero credit")
+    await _adjust_customer_credit(customer_id, float(body.delta), current, body.reason, body.note or "manual")
+    res = await db.customers.find_one({"id": customer_id}, {"_id": 0})
+    return res
+
+
+@api_router.get("/customers/{customer_id}/credit-log")
+async def list_customer_credit(customer_id: str, _: dict = Depends(require_role("admin", "employee"))):
+    cursor = db.customer_credit_log.find({"customer_id": customer_id}, {"_id": 0}).sort("at", -1).limit(200)
+    return await cursor.to_list(200)
 
 
 # -----------------------------------------------------------------------------
@@ -1002,8 +1294,8 @@ async def list_payments(order_id: Optional[str] = None, customer_id: Optional[st
 async def dashboard_stats(current: dict = Depends(require_role("admin", "employee"))):
     today = now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    invoices = await db.orders.find({"type": "invoice"}, {"_id": 0}).to_list(5000)
-    orders = await db.orders.find({"type": "order"}, {"_id": 0}).to_list(5000)
+    invoices = await db.orders.find({"type": "invoice", "$or": [{"deleted_at": None}, {"deleted_at": {"$exists": False}}]}, {"_id": 0}).to_list(5000)
+    orders = await db.orders.find({"type": "order", "$or": [{"deleted_at": None}, {"deleted_at": {"$exists": False}}]}, {"_id": 0}).to_list(5000)
 
     total_revenue = sum(i["total"] for i in invoices)
     outstanding = sum(i.get("balance_due", 0.0) for i in invoices)
@@ -1090,6 +1382,8 @@ async def agent_stats(current: dict = Depends(require_role("sales_agent"))):
 async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
     cid = body.get("customer_id")
     items = body.get("items") or []
+    trade_ins_in = body.get("trade_ins") or []
+    credit_applied = float(body.get("credit_applied") or 0.0)
     customer = await db.customers.find_one({"id": cid}, {"_id": 0}) if cid else None
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -1112,7 +1406,19 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
             "line_total": line,
             "stock": p.get("stock", 0),
         })
-    return {"items": out, "subtotal": round(subtotal, 2), "total": round(subtotal, 2)}
+    trade_ins, trade_in_total = _compute_trade_ins(trade_ins_in)
+    available_credit = float(customer.get("credit_balance") or 0.0)
+    credit_applied = round(max(0.0, min(credit_applied, available_credit)), 2)
+    total = round(max(round(subtotal, 2) - trade_in_total - credit_applied, 0.0), 2)
+    return {
+        "items": out,
+        "trade_ins": trade_ins,
+        "trade_in_total": trade_in_total,
+        "credit_applied": credit_applied,
+        "available_credit": available_credit,
+        "subtotal": round(subtotal, 2),
+        "total": total,
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -1133,7 +1439,14 @@ async def on_startup():
     await db.products.create_index("barcode")
     await db.orders.create_index("created_at")
     await db.orders.create_index("customer_id")
+    await db.orders.create_index("deleted_at")
     await db.payments.create_index("order_id")
+    await db.order_audit.create_index("order_id")
+
+    # Backfill: ensure credit_balance + deleted_at fields exist
+    await db.customers.update_many({"credit_balance": {"$exists": False}}, {"$set": {"credit_balance": 0.0}})
+    await db.orders.update_many({"deleted_at": {"$exists": False}}, {"$set": {"deleted_at": None}})
+    await db.orders.update_many({"trade_ins": {"$exists": False}}, {"$set": {"trade_ins": [], "trade_in_total": 0.0, "credit_applied": 0.0}})
 
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@wholesalepos.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")

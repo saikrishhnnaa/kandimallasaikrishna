@@ -11,7 +11,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../../components/ui/select";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, X } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Wallet } from "lucide-react";
 
 const empty = {
   name: "", company: "", email: "", phone: "", address: "", tax_id: "",
@@ -25,6 +25,10 @@ export default function Customers() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
+  const [creditOpen, setCreditOpen] = useState(false);
+  const [creditTarget, setCreditTarget] = useState(null);
+  const [creditDelta, setCreditDelta] = useState("");
+  const [creditNote, setCreditNote] = useState("");
 
   const load = () => api.get("/customers").then((r) => setList(r.data));
   useEffect(() => {
@@ -60,6 +64,17 @@ export default function Customers() {
     if (!window.confirm(`Delete ${c.name}?`)) return;
     try { await api.delete(`/customers/${c.id}`); toast.success("Deleted"); load(); }
     catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const openCredit = (c) => { setCreditTarget(c); setCreditDelta(""); setCreditNote(""); setCreditOpen(true); };
+  const submitCredit = async () => {
+    try {
+      await api.post(`/customers/${creditTarget.id}/credit`, {
+        delta: Number(creditDelta), reason: "manual_adjustment", note: creditNote,
+      });
+      toast.success("Credit adjusted");
+      setCreditOpen(false); load();
+    } catch (e) { toast.error(formatApiError(e)); }
   };
 
   return (
@@ -144,7 +159,7 @@ export default function Customers() {
         <table className="w-full text-sm">
           <thead className="bg-black/[0.02]">
             <tr className="text-left border-b border-[var(--border)]">
-              {["Company / Name", "Contact", "Terms", "Credit limit", "Custom prices", ""].map((h) => (
+              {["Company / Name", "Contact", "Terms", "Credit limit", "Credit balance", "Custom prices", ""].map((h) => (
                 <th key={h} className="px-4 py-3 overline text-[var(--text-muted)] font-medium">{h}</th>
               ))}
             </tr>
@@ -162,9 +177,15 @@ export default function Customers() {
                 </td>
                 <td className="px-4 py-3 text-xs font-mono">Net-{c.payment_terms_days}</td>
                 <td className="px-4 py-3 font-mono">{formatCurrency(c.credit_limit)}</td>
+                <td className="px-4 py-3 font-mono">
+                  <span className={c.credit_balance > 0 ? "text-[var(--success)]" : "text-[var(--text-muted)]"}>
+                    {formatCurrency(c.credit_balance || 0)}
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{c.custom_prices?.length || 0}</td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
+                    <Button size="icon" variant="ghost" onClick={() => openCredit(c)} title="Adjust credit" data-testid={`credit-${c.id}`}><Wallet size={14}/></Button>
                     <Button size="icon" variant="ghost" onClick={() => startEdit(c)}><Pencil size={14}/></Button>
                     <Button size="icon" variant="ghost" onClick={() => del(c)}><Trash2 size={14}/></Button>
                   </div>
@@ -172,11 +193,34 @@ export default function Customers() {
               </tr>
             ))}
             {!filtered.length && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-[var(--text-muted)]">No customers yet.</td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-[var(--text-muted)]">No customers yet.</td></tr>
             )}
           </tbody>
         </table>
       </div>
+      <Dialog open={creditOpen} onOpenChange={setCreditOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle className="font-display tracking-tight">Adjust credit · {creditTarget?.company || creditTarget?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div>
+              <Label className="overline">Current balance</Label>
+              <div className="font-display text-2xl mt-1">{formatCurrency(creditTarget?.credit_balance || 0)}</div>
+            </div>
+            <div>
+              <Label className="overline">Delta (positive adds, negative removes)</Label>
+              <Input type="number" step="0.01" value={creditDelta} onChange={(e) => setCreditDelta(e.target.value)} className="mt-2 font-mono" data-testid="credit-delta-input"/>
+            </div>
+            <div>
+              <Label className="overline">Note</Label>
+              <Input value={creditNote} onChange={(e) => setCreditNote(e.target.value)} className="mt-2"/>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCreditOpen(false)}>Cancel</Button>
+            <Button onClick={submitCredit} className="bg-[var(--primary)] hover:bg-[var(--primary-hover)]" data-testid="save-credit-button">Apply</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

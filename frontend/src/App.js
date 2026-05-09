@@ -82,6 +82,7 @@ function App() {
             <Route path="customers" element={<Customers />} />
             <Route path="orders" element={<Orders />} />
             <Route path="orders/new" element={<OrderNew />} />
+            <Route path="orders/:id/edit" element={<OrderNew />} />
             <Route path="orders/:id" element={<OrderDetail />} />
             <Route path="stock-movements" element={<StockMovements />} />
             <Route path="users" element={<ProtectedRoute roles={["admin"]}><Users /></ProtectedRoute>} />

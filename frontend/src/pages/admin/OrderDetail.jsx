@@ -13,7 +13,7 @@ import {
 } from "../../components/ui/select";
 import { useAuth } from "../../contexts/AuthContext";
 import { toast } from "sonner";
-import { ChevronLeft, Printer, Mail } from "lucide-react";
+import { ChevronLeft, Printer, Mail, Pencil, Trash2, RotateCcw, History } from "lucide-react";
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -21,12 +21,16 @@ export default function OrderDetail() {
   const { user } = useAuth();
   const [order, setOrder] = useState(null);
   const [payments, setPayments] = useState([]);
+  const [audit, setAudit] = useState([]);
   const [payOpen, setPayOpen] = useState(false);
   const [pay, setPay] = useState({ amount: "", method: "cash", reference: "", notes: "" });
 
   const load = () => {
     api.get(`/orders/${id}`).then((r) => setOrder(r.data));
     api.get(`/payments`, { params: { order_id: id } }).then((r) => setPayments(r.data));
+    if (user.role === "admin" || user.role === "employee") {
+      api.get(`/orders/${id}/audit`).then((r) => setAudit(r.data)).catch(() => {});
+    }
   };
   useEffect(() => { load(); }, [id]);
 
@@ -49,9 +53,21 @@ export default function OrderDetail() {
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
+  const softDelete = async () => {
+    if (!window.confirm("Delete this order? Stock and credits will be restored.")) return;
+    try { await api.delete(`/orders/${id}`); toast.success("Deleted"); load(); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const restore = async () => {
+    try { await api.post(`/orders/${id}/restore`); toast.success("Restored"); load(); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
+
   if (!order) return <div className="p-8 overline">Loading…</div>;
   const canConvert = (order.type === "quote") || (order.type === "order");
   const isEmployee = user.role === "admin" || user.role === "employee";
+  const isDeleted = !!order.deleted_at;
 
   return (
     <div className="p-8 max-w-[1100px] mx-auto" data-testid="order-detail-page">
@@ -68,26 +84,34 @@ export default function OrderDetail() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {isDeleted && user.role === "admin" && (
+            <Button variant="outline" onClick={restore} data-testid="restore-button"><RotateCcw size={14} className="mr-1.5"/>Restore</Button>
+          )}
+          {!isDeleted && isEmployee && (
+            <Button variant="outline" onClick={() => nav(`/admin/orders/${id}/edit`)} data-testid="edit-order-button">
+              <Pencil size={14} className="mr-1.5"/>Edit
+            </Button>
+          )}
           {(order.type === "invoice" || order.type === "quote") && (
             <Button variant="outline" onClick={() => window.open(`/admin/orders/${id}/print`, "_blank")} data-testid="open-print-button">
               <Printer size={14} className="mr-1.5"/>Print
             </Button>
           )}
-          {order.type === "invoice" && isEmployee && (
+          {!isDeleted && order.type === "invoice" && isEmployee && (
             <Button variant="outline" onClick={emailInvoice} data-testid="email-invoice-button">
               <Mail size={14} className="mr-1.5"/>Email
             </Button>
           )}
-          {canConvert && order.type === "quote" && isEmployee && (
+          {!isDeleted && canConvert && order.type === "quote" && isEmployee && (
             <>
               <Button variant="outline" onClick={() => convert("order")} data-testid="convert-order-button">→ Order</Button>
               <Button variant="outline" onClick={() => convert("invoice")} data-testid="convert-invoice-button">→ Invoice</Button>
             </>
           )}
-          {order.type === "order" && isEmployee && (
+          {!isDeleted && order.type === "order" && isEmployee && (
             <Button variant="outline" onClick={() => convert("invoice")} data-testid="convert-invoice-button">→ Invoice</Button>
           )}
-          {order.type === "invoice" && isEmployee && order.payment_status !== "paid" && (
+          {!isDeleted && order.type === "invoice" && isEmployee && order.payment_status !== "paid" && (
             <Dialog open={payOpen} onOpenChange={setPayOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-[var(--primary)] hover:bg-[var(--primary-hover)]" data-testid="record-payment-button">Record payment</Button>
@@ -123,8 +147,20 @@ export default function OrderDetail() {
               </DialogContent>
             </Dialog>
           )}
+          {!isDeleted && user.role === "admin" && (
+            <Button variant="outline" onClick={softDelete} data-testid="delete-order-button" className="text-[var(--danger)] hover:bg-[var(--danger)]/10">
+              <Trash2 size={14} className="mr-1.5"/>Delete
+            </Button>
+          )}
         </div>
       </div>
+
+      {isDeleted && (
+        <div className="surface-card p-4 mb-4 border-[var(--danger)]/30 bg-[var(--danger)]/[0.04]" data-testid="deleted-banner">
+          <p className="overline text-[var(--danger)]">Deleted</p>
+          <p className="text-sm mt-1">This {order.type} was deleted on {formatDate(order.deleted_at)}. Stock and credits were restored.</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
         <Stat label="Total" value={formatCurrency(order.total)} />
@@ -152,12 +188,48 @@ export default function OrderDetail() {
               </tr>
             ))}
             <tr className="bg-black/[0.02]">
+              <td colSpan={4} className="px-4 py-3 text-right overline">Subtotal</td>
+              <td className="px-4 py-3 text-right font-mono">{formatCurrency(order.subtotal)}</td>
+            </tr>
+            {order.trade_in_total > 0 && (
+              <tr>
+                <td colSpan={4} className="px-4 py-2 text-right text-sm text-[var(--primary)]">Trade-in</td>
+                <td className="px-4 py-2 text-right font-mono text-[var(--primary)]">− {formatCurrency(order.trade_in_total)}</td>
+              </tr>
+            )}
+            {order.credit_applied > 0 && (
+              <tr>
+                <td colSpan={4} className="px-4 py-2 text-right text-sm text-[var(--primary)]">Credit applied</td>
+                <td className="px-4 py-2 text-right font-mono text-[var(--primary)]">− {formatCurrency(order.credit_applied)}</td>
+              </tr>
+            )}
+            <tr className="bg-black/[0.04]">
               <td colSpan={4} className="px-4 py-3 text-right overline">Total</td>
               <td className="px-4 py-3 text-right font-display text-xl">{formatCurrency(order.total)}</td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      {(order.trade_ins?.length || 0) > 0 && (
+        <div className="surface-card overflow-hidden mb-4" data-testid="trade-ins-display">
+          <div className="px-4 py-3 border-b border-[var(--border)] bg-black/[0.02]">
+            <p className="overline">Trade-in items</p>
+          </div>
+          <table className="w-full text-sm">
+            <tbody>
+              {order.trade_ins.map((ti, i) => (
+                <tr key={i} className="border-b border-[var(--border)] last:border-0">
+                  <td className="px-4 py-2.5">{ti.description}</td>
+                  <td className="px-4 py-2.5 text-xs text-[var(--text-muted)]">{ti.restock ? "↻ Restocked" : "—"}</td>
+                  <td className="px-4 py-2.5 font-mono text-right">{ti.quantity} × {formatCurrency(ti.unit_value)}</td>
+                  <td className="px-4 py-2.5 font-mono text-right text-[var(--primary)]">− {formatCurrency(ti.line_total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {order.notes && (
         <div className="surface-card p-4 mb-4 text-sm">
@@ -166,7 +238,7 @@ export default function OrderDetail() {
         </div>
       )}
 
-      <div className="surface-card p-6">
+      <div className="surface-card p-6 mb-4">
         <p className="overline mb-3">Payments</p>
         {payments.length === 0 ? (
           <div className="text-sm text-[var(--text-muted)]">No payments recorded.</div>
@@ -188,6 +260,24 @@ export default function OrderDetail() {
           </table>
         )}
       </div>
+
+      {audit.length > 0 && (
+        <div className="surface-card p-6" data-testid="audit-section">
+          <div className="flex items-center gap-2 mb-3">
+            <History size={14} className="text-[var(--text-muted)]"/>
+            <p className="overline">Activity</p>
+          </div>
+          <ul className="space-y-2">
+            {audit.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 text-sm border-l-2 border-[var(--border)] pl-3 py-1">
+                <span className="text-xs font-mono text-[var(--text-muted)] w-44 shrink-0">{new Date(a.at).toLocaleString()}</span>
+                <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/5">{a.action.replace(/_/g, " ")}</span>
+                <span className="text-xs text-[var(--text-muted)] truncate">{a.by_name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

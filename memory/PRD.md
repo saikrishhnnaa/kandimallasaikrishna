@@ -63,6 +63,17 @@
 - **Settings**: `GET /api/settings/integration` exposes Resend and Public API status to admin.
 - **Env vars added**: `RESEND_API_KEY`, `SENDER_EMAIL`, `ADMIN_ALERT_EMAIL`, `PUBLIC_API_KEY`, `APP_URL`. All optional — features degrade gracefully.
 
+### v1.3 — Edit Anywhere, Trade-ins, Customer Credit, Soft Delete (2026-05-09)
+- **PATCH /api/orders/{id}**: edit any quote/order/invoice anytime — items, customer, notes, trade-ins, credit_applied. Fully recomputes totals, stock, balance_due, payment status, agent commission. Stock is automatically reconciled (old items restocked → new items checked + decremented).
+- **Soft delete**: `DELETE /api/orders/{id}` now sets `deleted_at`. Stock and credit are auto-restored. `POST /api/orders/{id}/restore` brings it back (re-checks stock + re-applies credit). `DELETE /api/orders/{id}/purge` for permanent removal (admin, must be soft-deleted first).
+- **Trade-in line items**: `trade_ins[]` on every order — description, qty, unit_value, optional `restock` flag (with `product_id`) to push the traded items back into inventory. Trade-in total auto-deducts from order total.
+- **Customer credit balance**: `credit_balance` on Customer. `POST /api/customers/{id}/credit` to manually add/subtract; `GET /api/customers/{id}/credit-log` for history. On orders, `credit_applied` field auto-deducts from total and from `credit_balance`. On edit/delete/restore, balance is reconciled automatically.
+- **Audit trail**: `order_audit` collection logs every create/edit/convert/delete/restore with timestamp + user. `GET /api/orders/{id}/audit` returns the timeline.
+- **Orders list**: now has dual filters — type (All / Quotes / Orders / Invoices) **and** status (All / Active / Deleted / Paid / Unpaid). Deleted rows shown with strikethrough + "deleted" badge.
+- **OrderDetail**: Edit, Delete, Restore buttons; trade-ins section, credit-applied row, audit timeline, deleted banner.
+- **Pricing preview** (`POST /api/pricing/preview`) accepts `trade_ins` and `credit_applied`, returns `available_credit` so the form can show real-time totals.
+- Customer page: new "Credit balance" column + per-row Wallet button to adjust credit.
+
 ## Backlog (Prioritised)
 - **P1** Print-friendly invoice / PDF download
 - **P1** Customer portal (their own quotes/invoices) — paves way for website integration
