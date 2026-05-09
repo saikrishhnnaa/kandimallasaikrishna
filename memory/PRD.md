@@ -106,15 +106,33 @@
   - Stock movements log uses "Product · Variant" naming for variant changes.
 - **2026-02 hotfix**: `PATCH /api/orders/{id}` now passes `variant_id` when re-decrementing edited line items so variant stock reconciles correctly (was decrementing parent `product.stock`). Verified by `/app/backend/tests/test_variants.py` (14/14 passing). Added `data-testid="agent-line-product-{idx}"` and `agent-line-variant-{idx}` on `AgentNewOrder.jsx` for parity with admin OrderNew.
 
+### v1.7 — Tax Jurisdictions & Product Images (2026-02)
+- **Tax jurisdictions** (composite, tax-exclusive):
+  - New collection `tax_jurisdictions` `{id, name, components: [{label, rate}], active}`. CRUD at `/api/tax-jurisdictions` (admin write, any auth read; DELETE soft-archives).
+  - `customers.default_tax_jurisdiction_id` — picked by default on every order for that customer.
+  - `orders.tax_jurisdiction_id`, `tax_jurisdiction_name`, `tax_components: [{label, rate, amount}]`, `tax` (sum). Override per order: omit field → use customer default; `""` → explicit no tax; specific id → override.
+  - Compute: `taxable = max(subtotal − trade_in_total − credit_applied, 0)` → tax = taxable × Σrate%. Total = taxable + tax.
+  - Each component appears as a separate line on OrderDetail, OrderPrint, and the agent preview (e.g. "CGST (9%) 18.00 / SGST (9%) 18.00").
+  - Pricing preview returns `tax_components`, `tax`, `total` for live recompute in the order form.
+  - Admin page at `/admin/tax` with grid editor for components and total-rate display.
+- **Product images** (multiple, base64 in MongoDB):
+  - `Product.images: [{id, data_url, filename, is_primary}]`. `is_primary` enforced (exactly one when present).
+  - Upload UI in `/admin/products` dialog: file input → client-side compress via `lib/imageUtils.compressToDataUrl` (canvas, max 800px, JPEG q=0.78). Star icon to set primary, X to remove.
+  - Products list shows the primary thumbnail in a new first column.
+  - Public catalog `/api/public/products[/:id]` returns `primary_image` (data URL) and `images: [data_url, …]`.
+- Tests: `/app/backend/tests/test_taxes.py` and `/app/backend/tests/test_product_images.py` cover CRUD, override semantics, composite math, trade-in/credit reduction of taxable base, image persistence and replacement. 22/22 + 14/14 variants regression all pass.
+
 ## Backlog (Prioritised)
-- **P1** Print-friendly invoice / PDF download
 - **P1** Customer portal (their own quotes/invoices) — paves way for website integration
-- **P1** Public read-only product catalog API for the company website to consume
+- **P1** Wire company website to `/api/public/products` (set PUBLIC_API_KEY)
 - **P2** Generate barcodes/labels for products
 - **P2** Email/WhatsApp share invoice links
 - **P2** Inventory adjustments log + transfer-between-warehouses
 - **P2** Stripe / Razorpay online invoice payments
-- **P3** Multi-currency, taxes per jurisdiction, bilingual UI
+- **P2** Per-variant low-stock dashboard widget
+- **P2** Server-side image size cap (defence-in-depth; client compression already in place)
+- **P3** Multi-currency, bilingual UI
+- **P3** Refactor `server.py` (~1900 lines) into modular routers
 
 ## Test Credentials
 See `/app/memory/test_credentials.md`.
