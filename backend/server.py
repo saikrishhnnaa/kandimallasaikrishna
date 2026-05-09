@@ -6,12 +6,15 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import uuid
+import asyncio
 import logging
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
 import bcrypt
 import jwt
+import resend
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -28,6 +31,15 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRES_DAYS = 7
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "onboarding@resend.dev").strip()
+ADMIN_ALERT_EMAIL = os.environ.get("ADMIN_ALERT_EMAIL", "").strip()
+PUBLIC_API_KEY = os.environ.get("PUBLIC_API_KEY", "").strip()
+APP_URL = os.environ.get("APP_URL", "").rstrip("/")
+
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 app = FastAPI(title="Wholesale POS API")
 api_router = APIRouter(prefix="/api")
@@ -98,6 +110,87 @@ def require_role(*roles: str):
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
     return checker
+
+
+def require_public_key(request: Request) -> None:
+    if not PUBLIC_API_KEY:
+        raise HTTPException(status_code=503, detail="Public API not configured. Set PUBLIC_API_KEY in backend/.env.")
+    key = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
+    if key != PUBLIC_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+# -----------------------------------------------------------------------------
+# Email (Resend) — non-blocking; no-op if RESEND_API_KEY is not set
+# -----------------------------------------------------------------------------
+async def send_email(to: str, subject: str, html: str) -> bool:
+    if not RESEND_API_KEY:
+        logger.info("Email skipped (RESEND_API_KEY not set): %s -> %s", subject, to)
+        return False
+    if not to:
+        return False
+    try:
+        await asyncio.to_thread(
+            resend.Emails.send,
+            {"from": SENDER_EMAIL, "to": [to], "subject": subject, "html": html},
+        )
+        logger.info("Email sent: %s -> %s", subject, to)
+        return True
+    except Exception as e:
+        logger.error("Email failed: %s", e)
+        return False
+
+
+# -----------------------------------------------------------------------------
+# Stock movements
+# -----------------------------------------------------------------------------
+async def apply_stock_change(
+    product_id: str, qty_delta: int, reason: str, reference: str, user: dict
+) -> Optional[dict]:
+    """Atomically increment stock and log a movement. Triggers low-stock alert."""
+    res = await db.products.find_one_and_update(
+        {"id": product_id},
+        {"$inc": {"stock": int(qty_delta)}},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    if not res:
+        return None
+    await db.stock_movements.insert_one({
+        "id": str(uuid.uuid4()),
+        "product_id": product_id,
+        "sku": res.get("sku", ""),
+        "name": res.get("name", ""),
+        "qty_delta": int(qty_delta),
+        "reason": reason,
+        "reference": reference or "",
+        "stock_after": int(res.get("stock", 0)),
+        "created_by": user.get("id", "system"),
+        "created_by_name": user.get("name", "System"),
+        "created_at": iso(now_utc()),
+    })
+    if qty_delta < 0:
+        threshold = int(res.get("low_stock_threshold", 10))
+        cur = int(res.get("stock", 0))
+        prev = cur - int(qty_delta)
+        if cur <= threshold < prev:
+            asyncio.create_task(_low_stock_alert(res))
+    return res
+
+
+async def _low_stock_alert(product: dict) -> None:
+    if not ADMIN_ALERT_EMAIL:
+        return
+    html = f"""
+    <div style="font-family:Helvetica,Arial,sans-serif;max-width:520px;margin:auto;padding:24px;border:1px solid #E5E5E0;border-radius:8px">
+      <p style="text-transform:uppercase;letter-spacing:0.2em;font-size:11px;color:#9C462C;margin:0">Low stock alert</p>
+      <h2 style="font-size:22px;letter-spacing:-0.02em;margin:8px 0 4px">{product.get('name','')}</h2>
+      <p style="color:#5C5C5C;margin:0 0 16px;font-family:monospace;font-size:12px">SKU {product.get('sku','')}</p>
+      <p>Current stock: <strong>{product.get('stock', 0)} {product.get('unit', 'pcs')}</strong></p>
+      <p>Threshold: {product.get('low_stock_threshold', 10)}</p>
+      <p style="color:#5C5C5C;font-size:12px;margin-top:24px">Replenish stock to avoid back-orders.</p>
+    </div>"""
+    await send_email(ADMIN_ALERT_EMAIL, f"Low stock: {product.get('name','')}", html)
 
 
 # -----------------------------------------------------------------------------
@@ -581,9 +674,26 @@ async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
     return doc
 
 
-async def _decrement_stock(items: List[dict]):
+async def _check_stock(items: List[dict]) -> None:
+    short = []
     for it in items:
-        await db.products.update_one({"id": it["product_id"]}, {"$inc": {"stock": -int(it["quantity"])}})
+        p = await db.products.find_one({"id": it["product_id"]}, {"_id": 0})
+        if not p:
+            continue
+        if int(p.get("stock", 0)) < int(it["quantity"]):
+            short.append(f"{p['name']} (have {p.get('stock', 0)}, need {it['quantity']})")
+    if short:
+        raise HTTPException(status_code=400, detail="Out of stock: " + "; ".join(short))
+
+
+async def _apply_decrements(items: List[dict], reference: str, user: dict) -> None:
+    for it in items:
+        await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_created", reference, user)
+
+
+async def _apply_restocks(items: List[dict], reference: str, user: dict, reason: str = "order_deleted") -> None:
+    for it in items:
+        await apply_stock_change(it["product_id"], int(it["quantity"]), reason, reference, user)
 
 
 @api_router.post("/orders", response_model=OrderOut)
@@ -591,9 +701,11 @@ async def create_order(body: OrderCreate, current: dict = Depends(get_current_us
     if current["role"] not in ("admin", "employee", "sales_agent"):
         raise HTTPException(status_code=403, detail="Forbidden")
     doc = await _build_order_doc(body, current)
+    if doc["type"] in ("order", "invoice"):
+        await _check_stock(doc["items"])
     await db.orders.insert_one(doc)
     if doc["type"] in ("order", "invoice"):
-        await _decrement_stock(doc["items"])
+        await _apply_decrements(doc["items"], doc["number"], current)
     doc.pop("_id", None)
     return doc
 
@@ -654,18 +766,185 @@ async def convert_order(order_id: str, target: OrderType, current: dict = Depend
         new_doc["amount_paid"] = 0.0
         new_doc["due_date"] = iso(now_utc() + timedelta(days=int(new_doc.get("payment_terms_days", 30))))
     if src["type"] == "quote" and target in ("order", "invoice"):
-        await _decrement_stock(new_doc["items"])
-    await db.orders.insert_one(new_doc)
+        await _check_stock(new_doc["items"])
+        await db.orders.insert_one(new_doc)
+        await _apply_decrements(new_doc["items"], new_doc["number"], current)
+    else:
+        await db.orders.insert_one(new_doc)
     new_doc.pop("_id", None)
     return new_doc
 
 
 @api_router.delete("/orders/{order_id}")
-async def delete_order(order_id: str, _: dict = Depends(require_role("admin"))):
-    r = await db.orders.delete_one({"id": order_id})
-    if r.deleted_count == 0:
+async def delete_order(order_id: str, current: dict = Depends(require_role("admin"))):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order["type"] in ("order", "invoice"):
+        await _apply_restocks(order["items"], order["number"], current, "order_deleted")
+    await db.orders.delete_one({"id": order_id})
     return {"ok": True}
+
+
+# -----------------------------------------------------------------------------
+# Stock movements log
+# -----------------------------------------------------------------------------
+class StockMovement(BaseModel):
+    id: str
+    product_id: str
+    sku: str
+    name: str
+    qty_delta: int
+    reason: str
+    reference: str
+    stock_after: int
+    created_by: str
+    created_by_name: str
+    created_at: str
+
+
+@api_router.get("/stock-movements", response_model=List[StockMovement])
+async def list_stock_movements(
+    product_id: Optional[str] = None,
+    _: dict = Depends(require_role("admin", "employee")),
+):
+    q: dict = {}
+    if product_id:
+        q["product_id"] = product_id
+    cursor = db.stock_movements.find(q, {"_id": 0}).sort("created_at", -1).limit(500)
+    return await cursor.to_list(500)
+
+
+class StockAdjust(BaseModel):
+    product_id: str
+    qty_delta: int
+    reason: str = "manual_adjustment"
+    note: str = ""
+
+
+@api_router.post("/stock-movements", response_model=StockMovement)
+async def manual_stock_adjust(body: StockAdjust, current: dict = Depends(require_role("admin", "employee"))):
+    if body.qty_delta == 0:
+        raise HTTPException(status_code=400, detail="qty_delta cannot be 0")
+    res = await apply_stock_change(body.product_id, int(body.qty_delta), body.reason, body.note, current)
+    if not res:
+        raise HTTPException(status_code=404, detail="Product not found")
+    last = await db.stock_movements.find_one({"product_id": body.product_id}, {"_id": 0}, sort=[("created_at", -1)])
+    return last
+
+
+# -----------------------------------------------------------------------------
+# Email invoice
+# -----------------------------------------------------------------------------
+def _render_invoice_html(order: dict, customer: dict) -> str:
+    rows = "".join(
+        f"<tr><td style='padding:8px;border-bottom:1px solid #E5E5E0;font-family:monospace;font-size:11px'>{it['sku']}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0'>{it['name']}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0;text-align:right;font-family:monospace'>{it['quantity']}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0;text-align:right;font-family:monospace'>${it['unit_price']:.2f}</td>"
+        f"<td style='padding:8px;border-bottom:1px solid #E5E5E0;text-align:right;font-family:monospace'>${it['line_total']:.2f}</td></tr>"
+        for it in order["items"]
+    )
+    link = f"{APP_URL}/admin/orders/{order['id']}/print" if APP_URL else ""
+    return f"""
+    <div style="font-family:Helvetica,Arial,sans-serif;max-width:640px;margin:auto;padding:32px;background:#fff;border:1px solid #E5E5E0;border-radius:8px">
+      <p style="text-transform:uppercase;letter-spacing:0.2em;font-size:11px;color:#9C462C;margin:0">{order['type']}</p>
+      <h1 style="font-size:32px;letter-spacing:-0.02em;margin:6px 0 4px">{order['number']}</h1>
+      <p style="color:#5C5C5C;margin:0">For <strong>{customer.get('company') or customer.get('name','')}</strong></p>
+      <p style="color:#5C5C5C;font-size:12px;margin-top:4px">Due: {order.get('due_date') or '—'}</p>
+      <table style="width:100%;border-collapse:collapse;margin-top:24px;font-size:13px">
+        <thead><tr style="background:#F7F7F6">
+          <th style="text-align:left;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">SKU</th>
+          <th style="text-align:left;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Item</th>
+          <th style="text-align:right;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Qty</th>
+          <th style="text-align:right;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Unit</th>
+          <th style="text-align:right;padding:8px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase">Total</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+      <div style="margin-top:24px;text-align:right">
+        <p style="margin:4px 0;color:#5C5C5C">Subtotal: <strong style="color:#0a0a0a;font-family:monospace">${order['subtotal']:.2f}</strong></p>
+        <p style="font-size:24px;letter-spacing:-0.02em;margin:8px 0">Total: <strong style="font-family:monospace">${order['total']:.2f}</strong></p>
+        <p style="font-size:12px;color:#5C5C5C">Balance due: ${order.get('balance_due', 0):.2f}</p>
+      </div>
+      {f'<p style="margin-top:24px"><a href="{link}" style="background:#9C462C;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none">View / Print invoice</a></p>' if link else ''}
+      <p style="color:#5C5C5C;font-size:11px;margin-top:32px;border-top:1px solid #E5E5E0;padding-top:16px">Sent from Wholesale POS.</p>
+    </div>"""
+
+
+@api_router.post("/orders/{order_id}/email")
+async def email_order(order_id: str, current: dict = Depends(require_role("admin", "employee"))):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+    to_email = (customer or {}).get("email") or ""
+    if not to_email:
+        raise HTTPException(status_code=400, detail="Customer has no email on file")
+    if not RESEND_API_KEY:
+        raise HTTPException(status_code=503, detail="Email service not configured. Add RESEND_API_KEY in backend/.env and restart.")
+    html = _render_invoice_html(order, customer or {})
+    sent = await send_email(to_email, f"{order['type'].title()} {order['number']}", html)
+    if not sent:
+        raise HTTPException(status_code=502, detail="Failed to send email. Check Resend dashboard / logs.")
+    return {"ok": True, "to": to_email}
+
+
+# -----------------------------------------------------------------------------
+# Public catalog API (for company website integration)
+# -----------------------------------------------------------------------------
+class PublicProduct(BaseModel):
+    id: str
+    sku: str
+    name: str
+    description: str
+    category: str
+    unit: str
+    base_price: float
+    has_bulk_pricing: bool
+    barcode: str = ""
+
+
+@api_router.get("/public/products", response_model=List[PublicProduct])
+async def public_list_products(_: None = Depends(require_public_key)):
+    items = await db.products.find({"active": True}, {"_id": 0}).to_list(2000)
+    return [
+        {
+            "id": p["id"], "sku": p["sku"], "name": p["name"],
+            "description": p.get("description", ""), "category": p.get("category", "General"),
+            "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
+            "has_bulk_pricing": bool(p.get("tiers")),
+            "barcode": p.get("barcode", ""),
+        }
+        for p in items
+    ]
+
+
+@api_router.get("/public/products/{product_id}", response_model=PublicProduct)
+async def public_get_product(product_id: str, _: None = Depends(require_public_key)):
+    p = await db.products.find_one({"id": product_id, "active": True}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "id": p["id"], "sku": p["sku"], "name": p["name"],
+        "description": p.get("description", ""), "category": p.get("category", "General"),
+        "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
+        "has_bulk_pricing": bool(p.get("tiers")),
+        "barcode": p.get("barcode", ""),
+    }
+
+
+@api_router.get("/settings/integration")
+async def get_integration_settings(_: dict = Depends(require_role("admin"))):
+    return {
+        "public_api_key_set": bool(PUBLIC_API_KEY),
+        "public_api_key": PUBLIC_API_KEY if PUBLIC_API_KEY else None,
+        "resend_configured": bool(RESEND_API_KEY),
+        "sender_email": SENDER_EMAIL,
+        "admin_alert_email": ADMIN_ALERT_EMAIL or None,
+        "app_url": APP_URL or None,
+        "public_endpoints": ["/api/public/products", "/api/public/products/{id}"],
+    }
 
 
 # -----------------------------------------------------------------------------

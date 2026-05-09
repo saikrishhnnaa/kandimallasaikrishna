@@ -13,7 +13,7 @@ import {
 } from "../../components/ui/select";
 import { useAuth } from "../../contexts/AuthContext";
 import { toast } from "sonner";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Printer, Mail } from "lucide-react";
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -42,6 +42,13 @@ export default function OrderDetail() {
     catch (e) { toast.error(formatApiError(e)); }
   };
 
+  const emailInvoice = async () => {
+    try {
+      const { data } = await api.post(`/orders/${id}/email`);
+      toast.success(`Sent to ${data.to}`);
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
   if (!order) return <div className="p-8 overline">Loading…</div>;
   const canConvert = (order.type === "quote") || (order.type === "order");
   const isEmployee = user.role === "admin" || user.role === "employee";
@@ -61,6 +68,16 @@ export default function OrderDetail() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {(order.type === "invoice" || order.type === "quote") && (
+            <Button variant="outline" onClick={() => window.open(`/admin/orders/${id}/print`, "_blank")} data-testid="open-print-button">
+              <Printer size={14} className="mr-1.5"/>Print
+            </Button>
+          )}
+          {order.type === "invoice" && isEmployee && (
+            <Button variant="outline" onClick={emailInvoice} data-testid="email-invoice-button">
+              <Mail size={14} className="mr-1.5"/>Email
+            </Button>
+          )}
           {canConvert && order.type === "quote" && isEmployee && (
             <>
               <Button variant="outline" onClick={() => convert("order")} data-testid="convert-order-button">→ Order</Button>

@@ -12,6 +12,9 @@ import Customers from "./pages/admin/Customers";
 import Orders from "./pages/admin/Orders";
 import OrderDetail from "./pages/admin/OrderDetail";
 import OrderNew from "./pages/admin/OrderNew";
+import OrderPrint from "./pages/admin/OrderPrint";
+import StockMovements from "./pages/admin/StockMovements";
+import Integration from "./pages/admin/Integration";
 import Users from "./pages/admin/Users";
 import Reports from "./pages/admin/Reports";
 import AgentHome from "./pages/agent/AgentHome";
@@ -59,6 +62,14 @@ function App() {
           <Route path="/" element={<RoleRedirect />} />
 
           <Route
+            path="/admin/orders/:id/print"
+            element={
+              <ProtectedRoute roles={["admin", "employee"]}>
+                <OrderPrint />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/admin"
             element={
               <ProtectedRoute roles={["admin", "employee"]}>
@@ -72,8 +83,10 @@ function App() {
             <Route path="orders" element={<Orders />} />
             <Route path="orders/new" element={<OrderNew />} />
             <Route path="orders/:id" element={<OrderDetail />} />
+            <Route path="stock-movements" element={<StockMovements />} />
             <Route path="users" element={<ProtectedRoute roles={["admin"]}><Users /></ProtectedRoute>} />
             <Route path="reports" element={<ProtectedRoute roles={["admin"]}><Reports /></ProtectedRoute>} />
+            <Route path="integration" element={<ProtectedRoute roles={["admin"]}><Integration /></ProtectedRoute>} />
           </Route>
 
           <Route

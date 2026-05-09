@@ -49,6 +49,20 @@
 - `/agent` — mobile bottom-nav home (KPIs)
 - `/agent/catalog`, `/agent/new-order`, `/agent/sales`
 
+### v1.2 — PDF/Print Invoices, Public API, Email & Stock Automation (2026-05-09)
+- **Printable invoices**: `/admin/orders/:id/print` route — clean print-friendly layout, browser "Print / Save as PDF" button. Print + Email buttons added on OrderDetail.
+- **Email invoice (Resend)**: `POST /api/orders/{id}/email` sends a styled HTML invoice via Resend SDK. Async, non-blocking. Returns 503 if `RESEND_API_KEY` not set, 400 if customer has no email.
+- **Public catalog API** (for company website): `GET /api/public/products` and `/api/public/products/{id}`, gated by `X-API-Key` header (or `?api_key=`). Returns sanitised product data (no internal stock/tier details, only `has_bulk_pricing` flag).
+- **Stock automation**:
+  - Out-of-stock guard on order/invoice creation and quote→order/invoice conversion (400 with detail listing shortages)
+  - Auto-restore stock when order/invoice is deleted
+  - Stock movements log (`stock_movements` collection): every change is recorded with reason, reference, qty_delta, stock_after, user
+  - Manual stock adjustments: `POST /api/stock-movements` (admin/employee)
+  - Low-stock email alerts to `ADMIN_ALERT_EMAIL` when stock crosses threshold (only on the transition, not every drop below)
+- **Admin nav**: added "Stock Log" (admin/employee) and "Integration" (admin) entries.
+- **Settings**: `GET /api/settings/integration` exposes Resend and Public API status to admin.
+- **Env vars added**: `RESEND_API_KEY`, `SENDER_EMAIL`, `ADMIN_ALERT_EMAIL`, `PUBLIC_API_KEY`, `APP_URL`. All optional — features degrade gracefully.
+
 ## Backlog (Prioritised)
 - **P1** Print-friendly invoice / PDF download
 - **P1** Customer portal (their own quotes/invoices) — paves way for website integration

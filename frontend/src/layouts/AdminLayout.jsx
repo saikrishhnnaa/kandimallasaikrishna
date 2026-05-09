@@ -9,6 +9,8 @@ import {
   ShoppingCart,
   Shield,
   BarChart3,
+  Boxes,
+  Plug,
   LogOut,
 } from "lucide-react";
 
@@ -17,8 +19,10 @@ const NAV = [
   { to: "/admin/orders", label: "Orders", icon: ShoppingCart, roles: ["admin", "employee"] },
   { to: "/admin/products", label: "Products", icon: Package, roles: ["admin", "employee"] },
   { to: "/admin/customers", label: "Customers", icon: UsersIcon, roles: ["admin", "employee"] },
+  { to: "/admin/stock-movements", label: "Stock Log", icon: Boxes, roles: ["admin", "employee"] },
   { to: "/admin/users", label: "Team", icon: Shield, roles: ["admin"] },
   { to: "/admin/reports", label: "Reports", icon: BarChart3, roles: ["admin"] },
+  { to: "/admin/integration", label: "Integration", icon: Plug, roles: ["admin"] },
 ];
 
 export default function AdminLayout() {
