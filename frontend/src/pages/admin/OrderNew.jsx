@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, formatApiError, formatCurrency } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -18,6 +18,7 @@ import { useAuth } from "../../contexts/AuthContext";
 export default function OrderForm() {
   const nav = useNavigate();
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const isEdit = Boolean(id);
   const isAgent = user?.role === "sales_agent";
@@ -53,8 +54,25 @@ export default function OrderForm() {
         setNotes(o.notes || "");
         setTaxJurisdictionId(o.tax_jurisdiction_id ?? "");
       }).catch((e) => toast.error(formatApiError(e)));
+    } else {
+      // Prefill from catalog query params
+      const cidQ = searchParams.get("customer_id");
+      const typeQ = searchParams.get("type");
+      const itemsQ = searchParams.get("items");
+      if (cidQ) setCustomerId(cidQ);
+      if (typeQ) setType(typeQ);
+      if (itemsQ) {
+        try {
+          const parsed = JSON.parse(itemsQ);
+          if (Array.isArray(parsed)) {
+            setItems(parsed.map((i) => ({
+              product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity || 1),
+            })));
+          }
+        } catch (_) { /* ignore */ }
+      }
     }
-  }, [id, isEdit]);
+  }, [id, isEdit, searchParams]);
 
   const handleScan = async (code) => {
     try {

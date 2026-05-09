@@ -12,11 +12,13 @@ import {
   Boxes,
   Plug,
   Percent,
+  ShoppingBag,
   LogOut,
 } from "lucide-react";
 
 const NAV = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true, roles: ["admin", "employee"] },
+  { to: "/admin/catalog", label: "Catalog", icon: ShoppingBag, roles: ["admin", "employee"] },
   { to: "/admin/orders", label: "Orders", icon: ShoppingCart, roles: ["admin", "employee"] },
   { to: "/admin/products", label: "Products", icon: Package, roles: ["admin", "employee"] },
   { to: "/admin/customers", label: "Customers", icon: UsersIcon, roles: ["admin", "employee"] },

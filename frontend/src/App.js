@@ -16,11 +16,11 @@ import OrderPrint from "./pages/admin/OrderPrint";
 import StockMovements from "./pages/admin/StockMovements";
 import Integration from "./pages/admin/Integration";
 import TaxJurisdictions from "./pages/admin/TaxJurisdictions";
+import Catalog from "./pages/Catalog";
 import CustomerStatement from "./pages/admin/CustomerStatement";
 import Users from "./pages/admin/Users";
 import Reports from "./pages/admin/Reports";
 import AgentHome from "./pages/agent/AgentHome";
-import AgentCatalog from "./pages/agent/AgentCatalog";
 import AgentNewOrder from "./pages/agent/AgentNewOrder";
 import AgentSales from "./pages/agent/AgentSales";
 
@@ -99,6 +99,7 @@ function App() {
             <Route path="reports" element={<ProtectedRoute roles={["admin"]}><Reports /></ProtectedRoute>} />
             <Route path="integration" element={<ProtectedRoute roles={["admin"]}><Integration /></ProtectedRoute>} />
             <Route path="tax" element={<ProtectedRoute roles={["admin"]}><TaxJurisdictions /></ProtectedRoute>} />
+            <Route path="catalog" element={<Catalog />} />
           </Route>
 
           <Route
@@ -110,7 +111,7 @@ function App() {
             }
           >
             <Route index element={<AgentHome />} />
-            <Route path="catalog" element={<AgentCatalog />} />
+            <Route path="catalog" element={<Catalog />} />
             <Route path="new-order" element={<AgentNewOrder />} />
             <Route path="orders/:id/edit" element={<OrderNew />} />
             <Route path="sales" element={<AgentSales />} />
