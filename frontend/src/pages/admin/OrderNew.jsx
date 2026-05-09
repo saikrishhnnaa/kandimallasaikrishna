@@ -47,7 +47,12 @@ export default function OrderForm() {
         const o = r.data;
         setOriginalOrder(o);
         setCustomerId(o.customer_id);
-        setItems(o.items.map((it) => ({ product_id: it.product_id, variant_id: it.variant_id || null, quantity: it.quantity })));
+        setItems(o.items.map((it) => ({
+          product_id: it.product_id,
+          variant_id: it.variant_id || null,
+          quantity: it.quantity,
+          unit_price_override: typeof it.unit_price === "number" ? it.unit_price : "",
+        })));
         setTradeIns(o.trade_ins || []);
         setCreditApplied(o.credit_applied || 0);
         setNotes(o.notes || "");
@@ -124,7 +129,13 @@ export default function OrderForm() {
     const valid = items.filter((i) => i.product_id && Number(i.quantity) > 0);
     const payload = {
       customer_id: customerId,
-      items: valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) })),
+      items: valid.map((i) => {
+        const o = { product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) };
+        if (i.unit_price_override !== undefined && i.unit_price_override !== "" && i.unit_price_override !== null) {
+          o.unit_price_override = Number(i.unit_price_override);
+        }
+        return o;
+      }),
       trade_ins: tradeIns,
       credit_applied: Number(creditApplied) || 0,
     };
@@ -154,7 +165,13 @@ export default function OrderForm() {
         restock: !!ti.restock, product_id: ti.product_id || null, sku: ti.sku || "", note: ti.note || "",
       }));
     try {
-      const itemsPayload = valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) }));
+      const itemsPayload = valid.map((i) => {
+        const o = { product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) };
+        if (i.unit_price_override !== undefined && i.unit_price_override !== "" && i.unit_price_override !== null) {
+          o.unit_price_override = Number(i.unit_price_override);
+        }
+        return o;
+      });
       if (isEdit) {
         const patchBody = {
           customer_id: customerId,
@@ -276,12 +293,24 @@ export default function OrderForm() {
               </div>
             </div>
             <div className="space-y-2">
+              {items.length > 0 && (
+                <div className="grid grid-cols-12 gap-2 px-1">
+                  <div className="col-span-5 overline text-[10px]">Product</div>
+                  <div className="col-span-2 overline text-[10px]">Qty</div>
+                  <div className="col-span-3 overline text-[10px]">Unit price <span className="lowercase text-[var(--text-muted)] ml-1 normal-case">override · auto if blank</span></div>
+                  <div className="col-span-1 overline text-[10px] text-right">Line</div>
+                  <div className="col-span-1"></div>
+                </div>
+              )}
               {items.map((it, idx) => {
                 const prod = products.find((p) => p.id === it.product_id);
                 const hasVariants = prod?.variants?.length > 0;
+                const lineFromPreview = preview?.items?.find(
+                  (p) => p.product_id === it.product_id && (p.variant_id || null) === (it.variant_id || null)
+                );
                 return (
                   <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                    <div className={hasVariants ? "col-span-5" : "col-span-7"}>
+                    <div className={hasVariants ? "col-span-3" : "col-span-5"}>
                       <Select value={it.product_id} onValueChange={(v) => updateLine(idx, { product_id: v, variant_id: null })}>
                         <SelectTrigger data-testid={`line-product-${idx}`}><SelectValue placeholder="Choose product"/></SelectTrigger>
                         <SelectContent>
@@ -303,12 +332,26 @@ export default function OrderForm() {
                         </Select>
                       </div>
                     )}
-                    <div className="col-span-3">
+                    <div className="col-span-2">
                       <Input type="number" min="1" placeholder="Qty" value={it.quantity}
                         onChange={(e) => updateLine(idx, { quantity: e.target.value })}
+                        className="font-mono"
                         data-testid={`line-qty-${idx}`}/>
                     </div>
-                    <div className="col-span-2 flex justify-end">
+                    <div className="col-span-3">
+                      <Input
+                        type="number" min="0" step="0.01"
+                        placeholder={lineFromPreview ? formatCurrency(lineFromPreview.unit_price).replace(/[^0-9.]/g, "") : "auto"}
+                        value={it.unit_price_override ?? ""}
+                        onChange={(e) => updateLine(idx, { unit_price_override: e.target.value })}
+                        className="font-mono"
+                        data-testid={`line-price-${idx}`}
+                      />
+                    </div>
+                    <div className="col-span-1 text-right text-xs font-mono text-[var(--text-muted)]">
+                      {lineFromPreview ? formatCurrency(lineFromPreview.line_total) : "—"}
+                    </div>
+                    <div className="col-span-1 flex justify-end">
                       <Button variant="ghost" size="icon" onClick={() => removeLine(idx)}><Trash2 size={14}/></Button>
                     </div>
                   </div>

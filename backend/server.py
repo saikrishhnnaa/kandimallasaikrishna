@@ -450,6 +450,7 @@ class OrderItemIn(BaseModel):
     product_id: str
     variant_id: Optional[str] = None
     quantity: int
+    unit_price_override: Optional[float] = None  # admin/employee can set a custom price per line
 
 
 class OrderItem(BaseModel):
@@ -1000,7 +1001,16 @@ async def _compute_lines(items_in, customer: dict) -> tuple:
                 raise HTTPException(status_code=400, detail="Variant not found")
         elif variant_id:
             variant_id = None
-        unit_price = await resolve_price(product, customer, qty, variant)
+        override = d.get("unit_price_override")
+        if override is not None and override != "":
+            try:
+                unit_price = round(float(override), 2)
+                if unit_price < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"Invalid price override for {product['name']}")
+        else:
+            unit_price = await resolve_price(product, customer, qty, variant)
         line_total = round(unit_price * qty, 2)
         items.append({
             "product_id": product["id"],
@@ -2024,7 +2034,16 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
         variant_id = it.get("variant_id")
         if p.get("variants") and variant_id:
             variant = next((v for v in p["variants"] if v["id"] == variant_id), None)
-        unit = await resolve_price(p, customer, qty, variant)
+        override = it.get("unit_price_override")
+        if override is not None and override != "":
+            try:
+                unit = round(float(override), 2)
+                if unit < 0:
+                    unit = 0.0
+            except (TypeError, ValueError):
+                unit = await resolve_price(p, customer, qty, variant)
+        else:
+            unit = await resolve_price(p, customer, qty, variant)
         line = round(unit * qty, 2)
         subtotal += line
         out.append({
