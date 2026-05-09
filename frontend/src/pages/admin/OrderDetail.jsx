@@ -260,6 +260,14 @@ export default function OrderDetail() {
                 <td className="px-4 py-2 text-right font-mono text-[var(--primary)]">− {formatCurrency(order.credit_applied)}</td>
               </tr>
             )}
+            {(order.tax_components || []).map((c, i) => (
+              <tr key={`tax-${i}`}>
+                <td colSpan={4} className="px-4 py-2 text-right text-sm text-[var(--text-muted)]">
+                  {c.label} ({c.rate}%) {order.tax_jurisdiction_name ? <span className="text-[10px] ml-1">· {order.tax_jurisdiction_name}</span> : null}
+                </td>
+                <td className="px-4 py-2 text-right font-mono">{formatCurrency(c.amount)}</td>
+              </tr>
+            ))}
             <tr className="bg-black/[0.04]">
               <td colSpan={4} className="px-4 py-3 text-right overline">Total</td>
               <td className="px-4 py-3 text-right font-display text-xl">{formatCurrency(order.total)}</td>

@@ -10,7 +10,7 @@ import asyncio
 import logging
 import secrets
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Tuple
 
 import bcrypt
 import jwt
@@ -268,6 +268,13 @@ class Variant(BaseModel):
     active: bool = True
 
 
+class ProductImage(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    data_url: str  # data:image/...;base64,...
+    filename: str = ""
+    is_primary: bool = False
+
+
 class Product(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -280,6 +287,7 @@ class Product(BaseModel):
     base_price: float
     tiers: List[PriceTier] = []
     variants: List[Variant] = []
+    images: List[ProductImage] = []
     stock: int = 0
     low_stock_threshold: int = 10
     active: bool = True
@@ -296,6 +304,7 @@ class ProductCreate(BaseModel):
     base_price: float
     tiers: List[PriceTier] = []
     variants: List[Variant] = []
+    images: List[ProductImage] = []
     stock: int = 0
     low_stock_threshold: int = 10
 
@@ -310,9 +319,41 @@ class ProductUpdate(BaseModel):
     base_price: Optional[float] = None
     tiers: Optional[List[PriceTier]] = None
     variants: Optional[List[Variant]] = None
+    images: Optional[List[ProductImage]] = None
     stock: Optional[int] = None
     low_stock_threshold: Optional[int] = None
     active: Optional[bool] = None
+
+
+class TaxComponent(BaseModel):
+    label: str
+    rate: float
+
+
+class TaxJurisdiction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    components: List[TaxComponent] = []
+    active: bool = True
+    created_at: str = Field(default_factory=lambda: iso(now_utc()))
+
+
+class TaxJurisdictionCreate(BaseModel):
+    name: str
+    components: List[TaxComponent] = []
+
+
+class TaxJurisdictionUpdate(BaseModel):
+    name: Optional[str] = None
+    components: Optional[List[TaxComponent]] = None
+    active: Optional[bool] = None
+
+
+class OrderTaxLine(BaseModel):
+    label: str
+    rate: float
+    amount: float
 
 
 class CustomerPrice(BaseModel):
@@ -329,6 +370,7 @@ class Customer(BaseModel):
     phone: str = ""
     address: str = ""
     tax_id: str = ""
+    default_tax_jurisdiction_id: Optional[str] = None
     credit_limit: float = 0.0
     credit_balance: float = 0.0
     payment_terms_days: int = 30
@@ -345,6 +387,7 @@ class CustomerCreate(BaseModel):
     phone: str = ""
     address: str = ""
     tax_id: str = ""
+    default_tax_jurisdiction_id: Optional[str] = None
     credit_limit: float = 0.0
     payment_terms_days: int = 30
     custom_prices: List[CustomerPrice] = []
@@ -358,6 +401,7 @@ class CustomerUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     tax_id: Optional[str] = None
+    default_tax_jurisdiction_id: Optional[str] = None
     credit_limit: Optional[float] = None
     payment_terms_days: Optional[int] = None
     custom_prices: Optional[List[CustomerPrice]] = None
@@ -415,6 +459,7 @@ class OrderCreate(BaseModel):
     notes: str = ""
     trade_ins: List[TradeInIn] = []
     credit_applied: float = 0.0
+    tax_jurisdiction_id: Optional[str] = None
 
 
 class OrderUpdate(BaseModel):
@@ -423,6 +468,7 @@ class OrderUpdate(BaseModel):
     notes: Optional[str] = None
     trade_ins: Optional[List[TradeInIn]] = None
     credit_applied: Optional[float] = None
+    tax_jurisdiction_id: Optional[str] = None
 
 
 class OrderOut(BaseModel):
@@ -437,6 +483,9 @@ class OrderOut(BaseModel):
     credit_applied: float = 0.0
     subtotal: float
     tax: float
+    tax_jurisdiction_id: Optional[str] = None
+    tax_jurisdiction_name: str = ""
+    tax_components: List[OrderTaxLine] = []
     total: float
     status: OrderStatus
     payment_status: PayStatus
@@ -647,6 +696,47 @@ async def delete_product(product_id: str, _: dict = Depends(require_role("admin"
 
 
 # -----------------------------------------------------------------------------
+# Tax Jurisdictions
+# -----------------------------------------------------------------------------
+@api_router.get("/tax-jurisdictions", response_model=List[TaxJurisdiction])
+async def list_tax_jurisdictions(_: dict = Depends(get_current_user)):
+    cursor = db.tax_jurisdictions.find({}, {"_id": 0}).sort("created_at", -1)
+    return await cursor.to_list(500)
+
+
+@api_router.post("/tax-jurisdictions", response_model=TaxJurisdiction)
+async def create_tax_jurisdiction(body: TaxJurisdictionCreate, _: dict = Depends(require_role("admin"))):
+    j = TaxJurisdiction(**body.model_dump())
+    await db.tax_jurisdictions.insert_one(j.model_dump())
+    return j
+
+
+@api_router.patch("/tax-jurisdictions/{jurisdiction_id}", response_model=TaxJurisdiction)
+async def update_tax_jurisdiction(jurisdiction_id: str, body: TaxJurisdictionUpdate, _: dict = Depends(require_role("admin"))):
+    update = body.model_dump(exclude_unset=True)
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    if "components" in update:
+        update["components"] = [
+            c if isinstance(c, dict) else c.model_dump() for c in update["components"]
+        ]
+    res = await db.tax_jurisdictions.find_one_and_update(
+        {"id": jurisdiction_id}, {"$set": update}, return_document=True, projection={"_id": 0}
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail="Jurisdiction not found")
+    return res
+
+
+@api_router.delete("/tax-jurisdictions/{jurisdiction_id}")
+async def delete_tax_jurisdiction(jurisdiction_id: str, _: dict = Depends(require_role("admin"))):
+    res = await db.tax_jurisdictions.update_one({"id": jurisdiction_id}, {"$set": {"active": False}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Jurisdiction not found")
+    return {"ok": True}
+
+
+# -----------------------------------------------------------------------------
 # Customers
 # -----------------------------------------------------------------------------
 @api_router.get("/customers", response_model=List[Customer])
@@ -664,7 +754,7 @@ async def create_customer(body: CustomerCreate, _: dict = Depends(require_role("
 
 @api_router.patch("/customers/{customer_id}", response_model=Customer)
 async def update_customer(customer_id: str, body: CustomerUpdate, _: dict = Depends(require_role("admin", "employee"))):
-    update = body.model_dump(exclude_none=True)
+    update = body.model_dump(exclude_unset=True)
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
     if "custom_prices" in update:
@@ -793,6 +883,30 @@ async def _adjust_customer_credit(customer_id: str, delta: float, current: dict,
     })
 
 
+async def _resolve_tax_jurisdiction(jurisdiction_id: Optional[str], customer: dict) -> Optional[dict]:
+    """Resolve which jurisdiction applies. None or unset => use customer's default. Empty string => no tax."""
+    if jurisdiction_id == "":
+        return None
+    target_id = jurisdiction_id if jurisdiction_id else customer.get("default_tax_jurisdiction_id")
+    if not target_id:
+        return None
+    j = await db.tax_jurisdictions.find_one({"id": target_id, "active": True}, {"_id": 0})
+    return j
+
+
+def _compute_tax(taxable: float, jurisdiction: Optional[dict]) -> Tuple[List[dict], float, str, Optional[str]]:
+    if not jurisdiction or taxable <= 0:
+        return [], 0.0, "", (jurisdiction or {}).get("id")
+    components: List[dict] = []
+    total = 0.0
+    for c in jurisdiction.get("components", []) or []:
+        rate = float(c.get("rate") or 0.0)
+        amount = round(taxable * rate / 100.0, 2)
+        components.append({"label": c["label"], "rate": rate, "amount": amount})
+        total += amount
+    return components, round(total, 2), jurisdiction.get("name", ""), jurisdiction.get("id")
+
+
 async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
     customer = await db.customers.find_one({"id": body.customer_id}, {"_id": 0})
     if not customer:
@@ -805,7 +919,11 @@ async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
     available_credit = float(customer.get("credit_balance") or 0.0)
     if credit_applied > available_credit + 0.001:
         raise HTTPException(status_code=400, detail=f"Customer has only {available_credit:.2f} credit available")
-    total = round(max(subtotal - trade_in_total - credit_applied, 0.0), 2)
+    taxable = round(max(subtotal - trade_in_total - credit_applied, 0.0), 2)
+    body_dump = body.model_dump(exclude_unset=True)
+    jurisdiction = await _resolve_tax_jurisdiction(body_dump.get("tax_jurisdiction_id"), customer)
+    tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+    total = round(taxable + tax_total, 2)
     commission_rate = float(current.get("commission_rate") or 0.0) if current["role"] == "sales_agent" else 0.0
     commission = round(total * commission_rate / 100.0, 2)
     terms = int(customer.get("payment_terms_days", 30))
@@ -821,7 +939,10 @@ async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
         "trade_in_total": trade_in_total,
         "credit_applied": credit_applied,
         "subtotal": subtotal,
-        "tax": 0.0,
+        "tax": tax_total,
+        "tax_jurisdiction_id": jur_id,
+        "tax_jurisdiction_name": jur_name,
+        "tax_components": tax_components,
         "total": total,
         "status": "draft" if body.type == "quote" else "confirmed",
         "payment_status": "unpaid",
@@ -1007,7 +1128,22 @@ async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends
     if delta_credit_applied != 0:
         await _adjust_customer_credit(customer_id, -delta_credit_applied, current, "credit_adjusted_on_edit", order["number"])
 
-    total = round(max(subtotal - trade_in_total - new_credit, 0.0), 2)
+    # Tax: only recompute if explicitly provided OR if customer changed and original used customer default
+    body_dump = body.model_dump(exclude_unset=True)
+    taxable = round(max(subtotal - trade_in_total - new_credit, 0.0), 2)
+    if "tax_jurisdiction_id" in body_dump:
+        jurisdiction = await _resolve_tax_jurisdiction(body_dump.get("tax_jurisdiction_id"), customer)
+        tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+    else:
+        # keep existing jurisdiction, just rescale amounts proportionally to new taxable
+        existing_id = order.get("tax_jurisdiction_id")
+        if existing_id:
+            jurisdiction = await db.tax_jurisdictions.find_one({"id": existing_id}, {"_id": 0})
+            tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+        else:
+            tax_components, tax_total, jur_name, jur_id = [], 0.0, "", None
+
+    total = round(taxable + tax_total, 2)
     amount_paid = float(order.get("amount_paid", 0.0))
     balance_due = round(max(total - amount_paid, 0.0), 2) if order["type"] == "invoice" else 0.0
     pay_status = "paid" if balance_due <= 0.001 and amount_paid > 0 else ("partial" if amount_paid > 0 else "unpaid")
@@ -1022,6 +1158,10 @@ async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends
         "trade_in_total": trade_in_total,
         "credit_applied": new_credit,
         "subtotal": subtotal,
+        "tax": tax_total,
+        "tax_jurisdiction_id": jur_id,
+        "tax_jurisdiction_name": jur_name,
+        "tax_components": tax_components,
         "total": total,
         "balance_due": balance_due,
         "payment_status": pay_status,
@@ -1438,21 +1578,30 @@ class PublicProduct(BaseModel):
     base_price: float
     has_bulk_pricing: bool
     barcode: str = ""
+    primary_image: Optional[str] = None
+    images: List[str] = []
+
+
+def _public_product_payload(p: dict) -> dict:
+    imgs = p.get("images") or []
+    primary = next((i.get("data_url") for i in imgs if i.get("is_primary")), None)
+    if not primary and imgs:
+        primary = imgs[0].get("data_url")
+    return {
+        "id": p["id"], "sku": p["sku"], "name": p["name"],
+        "description": p.get("description", ""), "category": p.get("category", "General"),
+        "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
+        "has_bulk_pricing": bool(p.get("tiers")),
+        "barcode": p.get("barcode", ""),
+        "primary_image": primary,
+        "images": [i.get("data_url") for i in imgs if i.get("data_url")],
+    }
 
 
 @api_router.get("/public/products", response_model=List[PublicProduct])
 async def public_list_products(_: None = Depends(require_public_key)):
     items = await db.products.find({"active": True}, {"_id": 0}).to_list(2000)
-    return [
-        {
-            "id": p["id"], "sku": p["sku"], "name": p["name"],
-            "description": p.get("description", ""), "category": p.get("category", "General"),
-            "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
-            "has_bulk_pricing": bool(p.get("tiers")),
-            "barcode": p.get("barcode", ""),
-        }
-        for p in items
-    ]
+    return [_public_product_payload(p) for p in items]
 
 
 @api_router.get("/public/products/{product_id}", response_model=PublicProduct)
@@ -1460,13 +1609,7 @@ async def public_get_product(product_id: str, _: None = Depends(require_public_k
     p = await db.products.find_one({"id": product_id, "active": True}, {"_id": 0})
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
-    return {
-        "id": p["id"], "sku": p["sku"], "name": p["name"],
-        "description": p.get("description", ""), "category": p.get("category", "General"),
-        "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
-        "has_bulk_pricing": bool(p.get("tiers")),
-        "barcode": p.get("barcode", ""),
-    }
+    return _public_product_payload(p)
 
 
 @api_router.get("/settings/integration")
@@ -1658,7 +1801,14 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
     trade_ins, trade_in_total = _compute_trade_ins(trade_ins_in)
     available_credit = float(customer.get("credit_balance") or 0.0)
     credit_applied = round(max(0.0, min(credit_applied, available_credit)), 2)
-    total = round(max(round(subtotal, 2) - trade_in_total - credit_applied, 0.0), 2)
+    taxable = round(max(round(subtotal, 2) - trade_in_total - credit_applied, 0.0), 2)
+    jurisdiction_id = body.get("tax_jurisdiction_id") if "tax_jurisdiction_id" in body else None
+    if "tax_jurisdiction_id" in body:
+        jurisdiction = await _resolve_tax_jurisdiction(jurisdiction_id, customer)
+    else:
+        jurisdiction = await _resolve_tax_jurisdiction(None, customer)
+    tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+    total = round(taxable + tax_total, 2)
     return {
         "items": out,
         "trade_ins": trade_ins,
@@ -1666,6 +1816,10 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
         "credit_applied": credit_applied,
         "available_credit": available_credit,
         "subtotal": round(subtotal, 2),
+        "tax": tax_total,
+        "tax_jurisdiction_id": jur_id,
+        "tax_jurisdiction_name": jur_name,
+        "tax_components": tax_components,
         "total": total,
     }
 
@@ -1691,12 +1845,16 @@ async def on_startup():
     await db.orders.create_index("deleted_at")
     await db.payments.create_index("order_id")
     await db.order_audit.create_index("order_id")
+    await db.tax_jurisdictions.create_index("name")
 
     # Backfill: ensure credit_balance + deleted_at fields exist
     await db.customers.update_many({"credit_balance": {"$exists": False}}, {"$set": {"credit_balance": 0.0}})
+    await db.customers.update_many({"default_tax_jurisdiction_id": {"$exists": False}}, {"$set": {"default_tax_jurisdiction_id": None}})
+    await db.products.update_many({"images": {"$exists": False}}, {"$set": {"images": []}})
     await db.orders.update_many({"deleted_at": {"$exists": False}}, {"$set": {"deleted_at": None}})
     await db.orders.update_many({"trade_ins": {"$exists": False}}, {"$set": {"trade_ins": [], "trade_in_total": 0.0, "credit_applied": 0.0}})
     await db.orders.update_many({"agent_can_edit": {"$exists": False}}, {"$set": {"agent_can_edit": False}})
+    await db.orders.update_many({"tax_jurisdiction_id": {"$exists": False}}, {"$set": {"tax_jurisdiction_id": None, "tax_jurisdiction_name": "", "tax_components": []}})
 
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@wholesalepos.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")

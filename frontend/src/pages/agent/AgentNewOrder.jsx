@@ -29,16 +29,19 @@ export default function AgentNewOrder() {
   const handleScan = async (code) => {
     try {
       const { data } = await api.get(`/products/by-barcode/${encodeURIComponent(code)}`);
+      const product = data.product;
+      const variant = data.variant;
+      const matchKey = (it) => it.product_id === product.id && (it.variant_id || null) === (variant?.id || null);
       setItems((prev) => {
-        const idx = prev.findIndex((it) => it.product_id === data.id);
+        const idx = prev.findIndex(matchKey);
         if (idx >= 0) {
           const copy = [...prev];
           copy[idx] = { ...copy[idx], quantity: Number(copy[idx].quantity || 0) + 1 };
           return copy;
         }
-        return [...prev, { product_id: data.id, quantity: 1 }];
+        return [...prev, { product_id: product.id, variant_id: variant?.id || null, quantity: 1 }];
       });
-      toast.success(`Added: ${data.name}`);
+      toast.success(`Added: ${product.name}${variant ? " · " + variant.label : ""}`);
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
@@ -183,6 +186,20 @@ export default function AgentNewOrder() {
               <span className="font-mono ml-2">{formatCurrency(p.line_total)}</span>
             </div>
           ))}
+          {(preview.tax_components || []).length > 0 && (
+            <div className="border-t border-[var(--border)] mt-2 pt-2 space-y-1">
+              <div className="flex justify-between text-xs text-[var(--text-muted)]">
+                <span>Subtotal</span>
+                <span className="font-mono">{formatCurrency(preview.subtotal)}</span>
+              </div>
+              {preview.tax_components.map((c, i) => (
+                <div key={i} className="flex justify-between text-xs text-[var(--text-muted)]">
+                  <span>{c.label} ({c.rate}%)</span>
+                  <span className="font-mono">{formatCurrency(c.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="border-t border-[var(--border)] mt-3 pt-3 flex justify-between font-display text-2xl tracking-tight">
             <span>Total</span>
             <span>{formatCurrency(preview.total)}</span>

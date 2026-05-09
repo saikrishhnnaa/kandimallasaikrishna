@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api, formatApiError, formatCurrency } from "../../lib/api";
+import { compressToDataUrl } from "../../lib/imageUtils";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -8,12 +9,12 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../../components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, X, ScanLine } from "lucide-react";
+import { Plus, Pencil, Trash2, X, ScanLine, Upload, Star } from "lucide-react";
 import BarcodeScanner from "../../components/BarcodeScanner";
 
 const empty = {
   sku: "", barcode: "", name: "", description: "", category: "General", unit: "pcs",
-  base_price: 0, stock: 0, low_stock_threshold: 10, tiers: [],
+  base_price: 0, stock: 0, low_stock_threshold: 10, tiers: [], images: [],
 };
 
 export default function Products() {
@@ -32,7 +33,42 @@ export default function Products() {
   );
 
   const startCreate = () => { setEditing(null); setForm(empty); setOpen(true); };
-  const startEdit = (p) => { setEditing(p); setForm({ ...p, tiers: p.tiers || [], variants: p.variants || [] }); setOpen(true); };
+  const startEdit = (p) => { setEditing(p); setForm({ ...p, tiers: p.tiers || [], variants: p.variants || [], images: p.images || [] }); setOpen(true); };
+
+  const addImages = async (files) => {
+    const arr = Array.from(files || []);
+    if (!arr.length) return;
+    try {
+      const out = [];
+      for (const f of arr) {
+        if (!f.type.startsWith("image/")) continue;
+        const dataUrl = await compressToDataUrl(f);
+        out.push({
+          id: crypto.randomUUID(),
+          data_url: dataUrl,
+          filename: f.name,
+          is_primary: false,
+        });
+      }
+      setForm((f) => {
+        const existing = f.images || [];
+        const merged = [...existing, ...out];
+        if (!merged.some((i) => i.is_primary) && merged.length) merged[0].is_primary = true;
+        return { ...f, images: merged };
+      });
+    } catch (e) { toast.error("Image upload failed: " + (e?.message || e)); }
+  };
+
+  const setPrimary = (id) => {
+    setForm((f) => ({ ...f, images: (f.images || []).map((i) => ({ ...i, is_primary: i.id === id })) }));
+  };
+  const removeImage = (id) => {
+    setForm((f) => {
+      const next = (f.images || []).filter((i) => i.id !== id);
+      if (next.length && !next.some((i) => i.is_primary)) next[0].is_primary = true;
+      return { ...f, images: next };
+    });
+  };
 
   const submit = async () => {
     try {
@@ -56,6 +92,12 @@ export default function Products() {
             low_stock_threshold: Number(v.low_stock_threshold || 10),
             active: v.active !== false,
           })),
+        images: (form.images || []).map((i) => ({
+          id: i.id || crypto.randomUUID(),
+          data_url: i.data_url,
+          filename: i.filename || "",
+          is_primary: !!i.is_primary,
+        })),
       };
       if (editing) await api.patch(`/products/${editing.id}`, payload);
       else await api.post("/products", payload);
@@ -124,6 +166,43 @@ export default function Products() {
                 <div className="col-span-2">
                   <Label className="overline">Description</Label>
                   <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="mt-2"/>
+                </div>
+                <div className="col-span-2 border-t border-[var(--border)] pt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <Label className="overline">Photos</Label>
+                      <p className="text-xs text-[var(--text-muted)] mt-1">Click the star to set the primary image. Auto-resized to 800px.</p>
+                    </div>
+                    <label className="cursor-pointer">
+                      <input type="file" accept="image/*" multiple className="hidden"
+                        onChange={(e) => { addImages(e.target.files); e.target.value = ""; }}
+                        data-testid="product-image-input"/>
+                      <span className="inline-flex items-center text-sm h-9 px-3 rounded-md hover:bg-black/5 border border-[var(--border)]">
+                        <Upload size={14} className="mr-1.5"/>Upload
+                      </span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-6 gap-2">
+                    {(form.images || []).map((img) => (
+                      <div key={img.id} className="relative group aspect-square rounded-md overflow-hidden border border-[var(--border)] bg-black/[0.02]">
+                        <img src={img.data_url} alt={img.filename} className="w-full h-full object-cover"/>
+                        <button type="button" onClick={() => setPrimary(img.id)}
+                          className={`absolute top-1 left-1 w-6 h-6 rounded-full flex items-center justify-center ${img.is_primary ? "bg-[var(--primary)] text-white" : "bg-white/90 text-[var(--text-muted)] hover:text-[var(--primary)]"}`}
+                          data-testid={`product-image-primary-${img.id}`}
+                          title={img.is_primary ? "Primary image" : "Set as primary"}>
+                          <Star size={12} fill={img.is_primary ? "currentColor" : "none"}/>
+                        </button>
+                        <button type="button" onClick={() => removeImage(img.id)}
+                          className="absolute top-1 right-1 w-6 h-6 rounded-full bg-white/90 text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white flex items-center justify-center"
+                          data-testid={`product-image-remove-${img.id}`}>
+                          <X size={12}/>
+                        </button>
+                      </div>
+                    ))}
+                    {!form.images?.length && (
+                      <div className="col-span-6 text-xs text-[var(--text-muted)] italic py-3">No photos yet.</div>
+                    )}
+                  </div>
                 </div>
                 <div className="col-span-2">
                   <div className="flex items-center justify-between mb-2">
@@ -212,14 +291,23 @@ export default function Products() {
         <table className="w-full text-sm">
           <thead className="bg-black/[0.02]">
             <tr className="text-left border-b border-[var(--border)]">
-              {["SKU", "Barcode", "Name", "Category", "Stock", "Base price", "Variants", ""].map((h) => (
-                <th key={h} className="px-4 py-3 overline text-[var(--text-muted)] font-medium">{h}</th>
+              {["", "SKU", "Barcode", "Name", "Category", "Stock", "Base price", "Variants", ""].map((h, i) => (
+                <th key={i} className="px-4 py-3 overline text-[var(--text-muted)] font-medium">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {filtered.map((p) => (
+            {filtered.map((p) => {
+              const primary = (p.images || []).find((i) => i.is_primary) || (p.images || [])[0];
+              return (
               <tr key={p.id} className="border-b border-[var(--border)] last:border-0 hover:bg-black/[0.015]">
+                <td className="px-4 py-3">
+                  {primary ? (
+                    <img src={primary.data_url} alt="" className="w-10 h-10 rounded object-cover border border-[var(--border)]" data-testid={`product-thumb-${p.sku}`}/>
+                  ) : (
+                    <div className="w-10 h-10 rounded bg-black/[0.04] border border-[var(--border)]"/>
+                  )}
+                </td>
                 <td className="px-4 py-3 font-mono text-xs">{p.sku}</td>
                 <td className="px-4 py-3 font-mono text-xs text-[var(--text-muted)]">{p.barcode || "—"}</td>
                 <td className="px-4 py-3 font-medium">{p.name}</td>
@@ -245,9 +333,10 @@ export default function Products() {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {!filtered.length && (
-              <tr><td colSpan={8} className="px-4 py-10 text-center text-[var(--text-muted)]">No products yet. Click "New Product" to add one.</td></tr>
+              <tr><td colSpan={9} className="px-4 py-10 text-center text-[var(--text-muted)]">No products yet. Click "New Product" to add one.</td></tr>
             )}
           </tbody>
         </table>

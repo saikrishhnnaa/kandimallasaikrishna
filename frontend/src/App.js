@@ -15,6 +15,7 @@ import OrderNew from "./pages/admin/OrderNew";
 import OrderPrint from "./pages/admin/OrderPrint";
 import StockMovements from "./pages/admin/StockMovements";
 import Integration from "./pages/admin/Integration";
+import TaxJurisdictions from "./pages/admin/TaxJurisdictions";
 import CustomerStatement from "./pages/admin/CustomerStatement";
 import Users from "./pages/admin/Users";
 import Reports from "./pages/admin/Reports";
@@ -97,6 +98,7 @@ function App() {
             <Route path="users" element={<ProtectedRoute roles={["admin"]}><Users /></ProtectedRoute>} />
             <Route path="reports" element={<ProtectedRoute roles={["admin"]}><Reports /></ProtectedRoute>} />
             <Route path="integration" element={<ProtectedRoute roles={["admin"]}><Integration /></ProtectedRoute>} />
+            <Route path="tax" element={<ProtectedRoute roles={["admin"]}><TaxJurisdictions /></ProtectedRoute>} />
           </Route>
 
           <Route

@@ -15,12 +15,14 @@ import { Plus, Pencil, Trash2, X, Wallet, FileText } from "lucide-react";
 
 const empty = {
   name: "", company: "", email: "", phone: "", address: "", tax_id: "",
+  default_tax_jurisdiction_id: null,
   credit_limit: 0, payment_terms_days: 30, custom_prices: [], notes: "",
 };
 
 export default function Customers() {
   const [list, setList] = useState([]);
   const [products, setProducts] = useState([]);
+  const [jurisdictions, setJurisdictions] = useState([]);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
@@ -34,6 +36,7 @@ export default function Customers() {
   useEffect(() => {
     load();
     api.get("/products").then((r) => setProducts(r.data));
+    api.get("/tax-jurisdictions").then((r) => setJurisdictions(r.data));
   }, []);
 
   const filtered = list.filter((c) =>
@@ -105,6 +108,20 @@ export default function Customers() {
                 <F label="Tax ID"><Input value={form.tax_id} onChange={(e) => setForm({ ...form, tax_id: e.target.value })}/></F>
                 <F label="Credit limit"><Input type="number" value={form.credit_limit} onChange={(e) => setForm({ ...form, credit_limit: e.target.value })}/></F>
                 <F label="Payment terms (days)"><Input type="number" value={form.payment_terms_days} onChange={(e) => setForm({ ...form, payment_terms_days: e.target.value })}/></F>
+                <F label="Default tax jurisdiction">
+                  <Select
+                    value={form.default_tax_jurisdiction_id || "__none__"}
+                    onValueChange={(v) => setForm({ ...form, default_tax_jurisdiction_id: v === "__none__" ? null : v })}
+                  >
+                    <SelectTrigger data-testid="customer-tax-select"><SelectValue placeholder="No tax"/></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">No tax</SelectItem>
+                      {jurisdictions.filter((j) => j.active).map((j) => (
+                        <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </F>
                 <div className="col-span-2">
                   <Label className="overline">Address</Label>
                   <Textarea rows={2} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className="mt-2"/>

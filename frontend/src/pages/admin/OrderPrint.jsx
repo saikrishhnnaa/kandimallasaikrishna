@@ -113,10 +113,36 @@ export default function OrderPrint() {
                   <span className="text-[var(--text-muted)]">Subtotal</span>
                   <span className="font-mono">{formatCurrency(order.subtotal)}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[var(--text-muted)]">Tax</span>
-                  <span className="font-mono">{formatCurrency(order.tax)}</span>
-                </div>
+                {(order.trade_in_total || 0) > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[var(--text-muted)]">Trade-in</span>
+                    <span className="font-mono">− {formatCurrency(order.trade_in_total)}</span>
+                  </div>
+                )}
+                {(order.credit_applied || 0) > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[var(--text-muted)]">Credit applied</span>
+                    <span className="font-mono">− {formatCurrency(order.credit_applied)}</span>
+                  </div>
+                )}
+                {(order.tax_components || []).length > 0 ? (
+                  <>
+                    {order.tax_jurisdiction_name && (
+                      <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] pt-1">{order.tax_jurisdiction_name}</div>
+                    )}
+                    {order.tax_components.map((c, i) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="text-[var(--text-muted)]">{c.label} ({c.rate}%)</span>
+                        <span className="font-mono">{formatCurrency(c.amount)}</span>
+                      </div>
+                    ))}
+                  </>
+                ) : (order.tax || 0) > 0 ? (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[var(--text-muted)]">Tax</span>
+                    <span className="font-mono">{formatCurrency(order.tax)}</span>
+                  </div>
+                ) : null}
                 <div className="flex justify-between font-display text-2xl tracking-tighter pt-2 border-t border-[var(--text)]">
                   <span>Total</span>
                   <span>{formatCurrency(order.total)}</span>

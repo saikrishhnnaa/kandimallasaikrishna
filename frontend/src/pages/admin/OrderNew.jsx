@@ -24,12 +24,14 @@ export default function OrderForm() {
 
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
+  const [jurisdictions, setJurisdictions] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [items, setItems] = useState([]);
   const [tradeIns, setTradeIns] = useState([]);
   const [creditApplied, setCreditApplied] = useState(0);
   const [type, setType] = useState("order");
   const [notes, setNotes] = useState("");
+  const [taxJurisdictionId, setTaxJurisdictionId] = useState(undefined); // undefined = use customer default; "" = no tax; specific id = override
   const [preview, setPreview] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [originalOrder, setOriginalOrder] = useState(null);
@@ -38,6 +40,7 @@ export default function OrderForm() {
   useEffect(() => {
     api.get("/customers").then((r) => setCustomers(r.data));
     api.get("/products").then((r) => setProducts(r.data));
+    api.get("/tax-jurisdictions").then((r) => setJurisdictions(r.data));
     if (isEdit) {
       api.get(`/orders/${id}`).then((r) => {
         const o = r.data;
@@ -48,6 +51,7 @@ export default function OrderForm() {
         setCreditApplied(o.credit_applied || 0);
         setType(o.type);
         setNotes(o.notes || "");
+        setTaxJurisdictionId(o.tax_jurisdiction_id ?? "");
       }).catch((e) => toast.error(formatApiError(e)));
     }
   }, [id, isEdit]);
@@ -76,13 +80,15 @@ export default function OrderForm() {
   useEffect(() => {
     if (!customerId) { setPreview(null); return; }
     const valid = items.filter((i) => i.product_id && Number(i.quantity) > 0);
-    api.post("/pricing/preview", {
+    const payload = {
       customer_id: customerId,
       items: valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) })),
       trade_ins: tradeIns,
       credit_applied: Number(creditApplied) || 0,
-    }).then((r) => setPreview(r.data)).catch(() => setPreview(null));
-  }, [customerId, items, tradeIns, creditApplied]);
+    };
+    if (taxJurisdictionId !== undefined) payload.tax_jurisdiction_id = taxJurisdictionId;
+    api.post("/pricing/preview", payload).then((r) => setPreview(r.data)).catch(() => setPreview(null));
+  }, [customerId, items, tradeIns, creditApplied, taxJurisdictionId]);
 
   const customer = useMemo(() => customers.find((c) => c.id === customerId), [customers, customerId]);
 
@@ -108,22 +114,26 @@ export default function OrderForm() {
     try {
       const itemsPayload = valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) }));
       if (isEdit) {
-        const { data } = await api.patch(`/orders/${id}`, {
+        const patchBody = {
           customer_id: customerId,
           items: itemsPayload,
           trade_ins: tiPayload,
           credit_applied: Number(creditApplied) || 0,
           notes,
-        });
+        };
+        if (taxJurisdictionId !== undefined) patchBody.tax_jurisdiction_id = taxJurisdictionId;
+        const { data } = await api.patch(`/orders/${id}`, patchBody);
         toast.success(`${data.number} updated`);
         nav(isAgent ? "/agent/sales" : `/admin/orders/${data.id}`);
       } else {
-        const { data } = await api.post("/orders", {
+        const createBody = {
           customer_id: customerId, type, notes,
           items: itemsPayload,
           trade_ins: tiPayload,
           credit_applied: Number(creditApplied) || 0,
-        });
+        };
+        if (taxJurisdictionId !== undefined) createBody.tax_jurisdiction_id = taxJurisdictionId;
+        const { data } = await api.post("/orders", createBody);
         toast.success(`${data.number} created`);
         nav(isAgent ? "/agent/sales" : `/admin/orders/${data.id}`);
       }
@@ -171,6 +181,26 @@ export default function OrderForm() {
                     <SelectItem value="quote">Quote</SelectItem>
                     <SelectItem value="order">Sales Order</SelectItem>
                     <SelectItem value="invoice">Invoice</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2">
+                <Label className="overline">Tax jurisdiction</Label>
+                <Select
+                  value={taxJurisdictionId === undefined ? "__default__" : (taxJurisdictionId === "" ? "__none__" : taxJurisdictionId)}
+                  onValueChange={(v) => {
+                    if (v === "__default__") setTaxJurisdictionId(undefined);
+                    else if (v === "__none__") setTaxJurisdictionId("");
+                    else setTaxJurisdictionId(v);
+                  }}
+                >
+                  <SelectTrigger className="mt-2" data-testid="order-tax-select"><SelectValue/></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">Use customer default ({customer?.default_tax_jurisdiction_id ? (jurisdictions.find((j) => j.id === customer.default_tax_jurisdiction_id)?.name || "—") : "no tax"})</SelectItem>
+                    <SelectItem value="__none__">No tax (override)</SelectItem>
+                    {jurisdictions.filter((j) => j.active).map((j) => (
+                      <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -320,6 +350,9 @@ export default function OrderForm() {
             {(preview?.credit_applied || 0) > 0 && (
               <Row label="Credit applied" value={`− ${formatCurrency(preview.credit_applied)}`} accent />
             )}
+            {(preview?.tax_components || []).map((c, i) => (
+              <Row key={i} label={`${c.label} (${c.rate}%)`} value={formatCurrency(c.amount)} />
+            ))}
             <div className="flex justify-between font-display text-2xl tracking-tight pt-2 border-t border-[var(--border)] mt-2">
               <span>Total</span>
               <span>{formatCurrency(preview?.total || 0)}</span>

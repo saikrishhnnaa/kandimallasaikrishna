@@ -11,6 +11,7 @@ import {
   BarChart3,
   Boxes,
   Plug,
+  Percent,
   LogOut,
 } from "lucide-react";
 
@@ -22,6 +23,7 @@ const NAV = [
   { to: "/admin/stock-movements", label: "Stock Log", icon: Boxes, roles: ["admin", "employee"] },
   { to: "/admin/users", label: "Team", icon: Shield, roles: ["admin"] },
   { to: "/admin/reports", label: "Reports", icon: BarChart3, roles: ["admin"] },
+  { to: "/admin/tax", label: "Tax", icon: Percent, roles: ["admin"] },
   { to: "/admin/integration", label: "Integration", icon: Plug, roles: ["admin"] },
 ];
 

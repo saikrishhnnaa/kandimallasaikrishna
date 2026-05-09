@@ -1,0 +1,59 @@
+{
+  "summary": "Tested Tax Jurisdictions + Product Images features end-to-end. Backend: 22/22 new tests pass (1 skipped — public catalog gated by unset PUBLIC_API_KEY, by design). Variant regression also 14/14 pass — confirms previous PATCH variant_id stock-decrement bug is fixed. Frontend: /admin/tax, /admin/orders/new, /admin/products (Photos section + file input), /admin/customers (Default tax jurisdiction select with 'No tax' + active jurisdictions) all render and integrate correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/customers New customer dialog", "issues": ["The shadcn Dialog overlay appears semi-transparent — page table headers behind the dialog are faintly visible. Cosmetic only; no interaction impact."]}
+    ]
+  },
+  "verified_flows": [
+    "GET/POST/PATCH/DELETE /api/tax-jurisdictions: admin write-restricted (employee 403), employee can read, soft-delete sets active=false, PATCH replaces components and persists.",
+    "POST/PATCH /api/customers: default_tax_jurisdiction_id stored, changeable, and explicit null clears it.",
+    "POST /api/orders without tax_jurisdiction_id falls back to customer default; tax_components, tax_jurisdiction_id, tax_jurisdiction_name persist.",
+    "Composite Karnataka GST CGST 9% + SGST 9% on $200 → tax_components [{CGST,9,18},{SGST,9,18}], tax=36, total=236.",
+    "Override with another jurisdiction id (VAT 7%) on $200 → tax=14, total=214.",
+    "Explicit '' (empty string) on a customer-with-default → tax=0, tax_components=[], total=subtotal-trade_in-credit.",
+    "Trade-in reduces taxable base BEFORE tax: $200-$50=$150 taxable * 18% = 27 tax, total 177.",
+    "PATCH /api/orders/{id} without tax_jurisdiction_id: rescales tax to new taxable using existing jurisdiction ($300 * 18% = $54).",
+    "PATCH /api/orders/{id} with tax_jurisdiction_id='' clears tax (tax=0, tax_components=[], jurisdiction_id=null).",
+    "POST /api/pricing/preview: returns tax_components, tax, total; supports default fallback, '' override, and explicit id override.",
+    "POST /api/products with images[{data_url,is_primary}] persists; GET returns. PATCH replaces images list verbatim. Default empty list when omitted.",
+    "Frontend Tax page renders with 'New jurisdiction' button + jurisdictions label.",
+    "Frontend OrderNew header includes 'Tax jurisdiction' select.",
+    "Frontend Products dialog includes Photos section with input[type=file].",
+    "Frontend Customers dialog includes 'Default tax jurisdiction' select prepopulated with 'No tax' + active jurisdictions.",
+    "Variant regression suite (14/14): previous PATCH variant_id stock decrement bug is fixed and confirmed."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_taxes.py",
+    "/app/backend/tests/test_product_images.py",
+    "/app/backend/tests/test_variants.py",
+    "/app/test_reports/pytest/taxes_images_results.xml",
+    "/app/test_reports/pytest/variants_results.xml"
+  ],
+  "action_items": [
+    "(Optional) On PATCH /api/orders/{id} rescale path, _resolve_tax_jurisdiction is bypassed and find_one omits active=True filter — a soft-deleted (active:false) jurisdiction will still keep applying tax on edits to historical orders. Likely intentional (preserve historical tax) but worth confirming the design.",
+    "(Optional) /api/public/products is unconfigured (PUBLIC_API_KEY empty in /app/backend/.env). Public-catalog image flow test was skipped; set PUBLIC_API_KEY for that flow to be exercised.",
+    "(Cosmetic) Customer New-customer dialog overlay appears semi-transparent on /admin/customers."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1900+ lines — long-term should be split into routers (auth.py, products.py, orders.py, taxes.py, customers.py, public.py) following FastAPI router pattern. Currently a single-file god module.",
+    "_resolve_tax_jurisdiction filters by active=True, but the PATCH /orders rescale branch (line ~1141) does a raw find_one without that filter. Inconsistent with create-order semantics. Acceptable if intentional (don't drop tax on historical orders if jurisdiction archived), but should be a documented invariant.",
+    "Pydantic ConfigDict(extra='ignore') on Product / Customer / TaxJurisdiction is correct for forward-compat; consistent across models.",
+    "Server stores image data_url verbatim with no max-length / size validation. A malicious / mistaken upload of multi-MB base64 strings would bloat the products document beyond 16MB Mongo limit. Recommend a server-side soft cap (e.g., 1MB per image, 10 images per product) as defence in depth. Frontend compression mitigates but does not enforce.",
+    "tax_components stored as list-of-dicts {label, rate, amount}; OrderTaxLine model present but not used in OrderOut typing strictly (List[OrderTaxLine] declared correctly). OK.",
+    "_compute_tax returns (components, total, name, id). When taxable<=0 or jurisdiction is None the code returns id=jurisdiction['id'] only when jurisdiction truthy — this means if taxable<=0 BUT jurisdiction was selected, jurisdiction_id is preserved while components & amount are 0. Reasonable."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_taxes.py (new)",
+    "/app/backend/tests/test_product_images.py (new)"
+  ],
+  "success_rate": {"backend": "100% (22/22 new tax+image tests; 14/14 variants regression; 1 skip = unconfigured public API by design)", "frontend": "100% smoke + integration of all four UI surfaces (Tax page, OrderNew select, Products Photos dialog, Customer Default-Tax select)"},
+  "test_credentials": "admin@wholesalepos.com/admin123 (used)",
+  "seed_data_creation": "Created TEST_Karnataka_GST_*, TEST_Alt5pct_*, TEST_ToDelete_* tax jurisdictions; TEST Tax Product, TEST Image Product, TEST Image Replace, TEST No Image products; TEST_TaxCust_*, TEST_NoTaxCust_* customers; multiple TEST orders. All TEST_-prefixed and idempotent (each run creates fresh records via uuid suffix).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All backend & frontend feature tests for tax jurisdictions and product images pass. Tests are idempotent — rerun pytest /app/backend/tests/ at any time. Public catalog image test skips unless PUBLIC_API_KEY is set in /app/backend/.env. No regression in variants suite."
+}
