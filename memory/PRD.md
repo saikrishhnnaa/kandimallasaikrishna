@@ -112,6 +112,24 @@
   - `customers.default_tax_jurisdiction_id` — picked by default on every order for that customer.
   - `orders.tax_jurisdiction_id`, `tax_jurisdiction_name`, `tax_components: [{label, rate, amount}]`, `tax` (sum). Override per order: omit field → use customer default; `""` → explicit no tax; specific id → override.
   - Compute: `taxable = max(subtotal − trade_in_total − credit_applied, 0)` → tax = taxable × Σrate%. Total = taxable + tax.
+  - Each component appears as a separate line on OrderDetail, OrderPrint, and the agent preview.
+- **Product images** (multiple, base64 in MongoDB):
+  - `Product.images: [{id, data_url, filename, is_primary}]` with star-as-primary UI; client-side compression via `lib/imageUtils.compressToDataUrl` (max 800px, JPEG q=0.78).
+  - Primary thumbnail in product list; `/api/public/products[/:id]` returns `primary_image` and `images[]`.
+- 22/22 + 14/14 variants regression all pass.
+
+### v1.8 — Catalog & Invoices-only (2026-02)
+- **Catalog page** (`/admin/catalog` and `/agent/catalog`, all roles): visual product grid with primary image, search, filters (category / price min-max / in-stock), sort (name / price / newest), per-product variant select + qty + Add. Right-side cart sheet with line-level qty controls, customer + tax preview, and two checkout flows: inline create OR "Edit in form first" (URL-prefills `/{admin,agent}/orders/new?customer_id=…&items=[…]`).
+- **Invoices-only**: removed all create-side UI for `quote` and `order` document types. Sidebar entry renamed to "Invoices". `OrderNew`, `AgentNewOrder`, and `Catalog` always create `type="invoice"`. `OrderDetail` no longer shows quote→order/invoice convert buttons. Orders list filters by `?type=invoice` and shows status tabs only (Active / Paid / Unpaid / Deleted / All). Backend untouched — historical quote/order documents remain in the DB for reference.
+- **Bugfixes**:
+  - `AgentNewOrder.jsx` now reads `customer_id` and `items` from URL params and prefills state (catalog `Edit in form first` flow on agent now works).
+  - `Catalog.jsx` qty Input no longer mixes `value` + `defaultValue` (controlled-input warning gone).
+- **Tests**: iteration 3 verified catalog flows; iteration 4 verified invoices-only refactor + both bugfixes; full backend regression (variants + taxes + product images) re-runs at 36/36 green.
+- **Tax jurisdictions** (composite, tax-exclusive):
+  - New collection `tax_jurisdictions` `{id, name, components: [{label, rate}], active}`. CRUD at `/api/tax-jurisdictions` (admin write, any auth read; DELETE soft-archives).
+  - `customers.default_tax_jurisdiction_id` — picked by default on every order for that customer.
+  - `orders.tax_jurisdiction_id`, `tax_jurisdiction_name`, `tax_components: [{label, rate, amount}]`, `tax` (sum). Override per order: omit field → use customer default; `""` → explicit no tax; specific id → override.
+  - Compute: `taxable = max(subtotal − trade_in_total − credit_applied, 0)` → tax = taxable × Σrate%. Total = taxable + tax.
   - Each component appears as a separate line on OrderDetail, OrderPrint, and the agent preview (e.g. "CGST (9%) 18.00 / SGST (9%) 18.00").
   - Pricing preview returns `tax_components`, `tax`, `total` for live recompute in the order form.
   - Admin page at `/admin/tax` with grid editor for components and total-rate display.

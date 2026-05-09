@@ -146,7 +146,6 @@ export default function Catalog() {
     if (sendToForm) {
       const params = new URLSearchParams({
         customer_id: customerId,
-        type,
         items: JSON.stringify(cart),
       });
       const path = isAgent ? "/agent/new-order" : "/admin/orders/new";
