@@ -1,53 +1,99 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import React from "react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { Toaster } from "sonner";
+import Login from "./pages/Login";
+import AdminLayout from "./layouts/AdminLayout";
+import AgentLayout from "./layouts/AgentLayout";
+import Dashboard from "./pages/admin/Dashboard";
+import Products from "./pages/admin/Products";
+import Customers from "./pages/admin/Customers";
+import Orders from "./pages/admin/Orders";
+import OrderDetail from "./pages/admin/OrderDetail";
+import OrderNew from "./pages/admin/OrderNew";
+import Users from "./pages/admin/Users";
+import Reports from "./pages/admin/Reports";
+import AgentHome from "./pages/agent/AgentHome";
+import AgentCatalog from "./pages/agent/AgentCatalog";
+import AgentNewOrder from "./pages/agent/AgentNewOrder";
+import AgentSales from "./pages/agent/AgentSales";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+function ProtectedRoute({ children, roles }) {
+  const { user, loading } = useAuth();
+  const location = useLocation();
+  if (loading) return <FullscreenLoader />;
+  if (!user) return <Navigate to="/login" state={{ from: location }} replace />;
+  if (roles && !roles.includes(user.role)) return <Navigate to={defaultRouteFor(user.role)} replace />;
+  return children;
+}
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+function FullscreenLoader() {
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
+    <div className="min-h-screen flex items-center justify-center bg-[var(--bg)]">
+      <div className="overline">Loading…</div>
     </div>
   );
-};
+}
+
+function defaultRouteFor(role) {
+  if (role === "admin") return "/admin";
+  if (role === "employee") return "/admin/orders";
+  return "/agent";
+}
+
+function RoleRedirect() {
+  const { user, loading } = useAuth();
+  if (loading) return <FullscreenLoader />;
+  if (!user) return <Navigate to="/login" replace />;
+  return <Navigate to={defaultRouteFor(user.role)} replace />;
+}
 
 function App() {
   return (
-    <div className="App">
+    <AuthProvider>
       <BrowserRouter>
+        <Toaster position="top-right" richColors />
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<RoleRedirect />} />
+
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute roles={["admin", "employee"]}>
+                <AdminLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="products" element={<Products />} />
+            <Route path="customers" element={<Customers />} />
+            <Route path="orders" element={<Orders />} />
+            <Route path="orders/new" element={<OrderNew />} />
+            <Route path="orders/:id" element={<OrderDetail />} />
+            <Route path="users" element={<ProtectedRoute roles={["admin"]}><Users /></ProtectedRoute>} />
+            <Route path="reports" element={<ProtectedRoute roles={["admin"]}><Reports /></ProtectedRoute>} />
           </Route>
+
+          <Route
+            path="/agent"
+            element={
+              <ProtectedRoute roles={["sales_agent"]}>
+                <AgentLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<AgentHome />} />
+            <Route path="catalog" element={<AgentCatalog />} />
+            <Route path="new-order" element={<AgentNewOrder />} />
+            <Route path="sales" element={<AgentSales />} />
+          </Route>
+
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
-    </div>
+    </AuthProvider>
   );
 }
 
