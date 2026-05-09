@@ -9,7 +9,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../../components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, X, ScanLine, Upload, Star } from "lucide-react";
+import { Plus, Pencil, Trash2, X, ScanLine, Upload, Star, FileDown, FileUp } from "lucide-react";
 import BarcodeScanner from "../../components/BarcodeScanner";
 
 const empty = {
@@ -112,6 +112,34 @@ export default function Products() {
     catch (e) { toast.error(formatApiError(e)); }
   };
 
+  const exportCsv = async () => {
+    try {
+      const r = await api.get("/products/export", { responseType: "blob" });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `products-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const importCsv = async (file) => {
+    if (!file) return;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data } = await api.post("/products/import", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      const summary = `Created ${data.created} · Updated ${data.updated}` + (data.errors?.length ? ` · ${data.errors.length} error(s)` : "");
+      if (data.errors?.length) {
+        toast.error(`${summary}\nFirst: row ${data.errors[0].row} — ${data.errors[0].error}`, { duration: 8000 });
+      } else {
+        toast.success(summary);
+      }
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
   return (
     <div className="p-8 max-w-[1400px] mx-auto" data-testid="products-page">
       <div className="flex items-end justify-between mb-6">
@@ -128,6 +156,17 @@ export default function Products() {
             className="w-72 h-10"
             data-testid="products-search"
           />
+          <Button variant="outline" onClick={exportCsv} className="h-10" data-testid="products-export-button">
+            <FileDown size={14} className="mr-1.5"/>Export
+          </Button>
+          <label>
+            <input type="file" accept=".csv" className="hidden"
+              onChange={(e) => { importCsv(e.target.files?.[0]); e.target.value = ""; }}
+              data-testid="products-import-input"/>
+            <span className="cursor-pointer inline-flex items-center text-sm h-10 px-3 rounded-md border border-[var(--border)] hover:bg-black/5">
+              <FileUp size={14} className="mr-1.5"/>Import
+            </span>
+          </label>
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button onClick={startCreate} data-testid="new-product-button" className="h-10 bg-[var(--primary)] hover:bg-[var(--primary-hover)]">

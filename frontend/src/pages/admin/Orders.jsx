@@ -5,7 +5,8 @@ import { Input } from "../../components/ui/input";
 import {
   Tabs, TabsList, TabsTrigger,
 } from "../../components/ui/tabs";
-import { Plus } from "lucide-react";
+import { toast } from "sonner";
+import { Plus, FileDown } from "lucide-react";
 
 const STATUSES = [
   { id: "active", label: "Active" },
@@ -34,6 +35,18 @@ export default function Orders() {
     })
     .filter((o) => [o.number, o.customer_name, o.created_by_name].join(" ").toLowerCase().includes(search.toLowerCase()));
 
+  const exportCsv = async () => {
+    try {
+      const r = await api.get("/orders/export", { params: { type: "invoice", include_deleted: true }, responseType: "blob" });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `invoices-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Export failed"); }
+  };
+
   return (
     <div className="p-8 max-w-[1400px] mx-auto" data-testid="orders-page">
       <div className="flex items-end justify-between mb-6">
@@ -41,9 +54,14 @@ export default function Orders() {
           <p className="overline">Sales</p>
           <h1 className="font-display text-4xl tracking-tighter mt-1">Invoices</h1>
         </div>
-        <Link to="/admin/catalog" className="px-4 h-10 inline-flex items-center bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white rounded-md text-sm" data-testid="new-order-button">
-          <Plus size={16} className="mr-1.5"/>New Invoice
-        </Link>
+        <div className="flex items-center gap-2">
+          <button onClick={exportCsv} className="h-10 px-3 inline-flex items-center text-sm border border-[var(--border)] rounded-md hover:bg-black/5" data-testid="invoices-export-button">
+            <FileDown size={14} className="mr-1.5"/>Export
+          </button>
+          <Link to="/admin/catalog" className="px-4 h-10 inline-flex items-center bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white rounded-md text-sm" data-testid="new-order-button">
+            <Plus size={16} className="mr-1.5"/>New Invoice
+          </Link>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">

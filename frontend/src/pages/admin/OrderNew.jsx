@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams, Link } from "react-router-dom";
 import { api, formatApiError, formatCurrency } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -10,7 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../../components/ui/select";
 import { toast } from "sonner";
-import { Plus, Trash2, ChevronLeft, ScanLine, Repeat, Wallet } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, ScanLine, Repeat, Wallet, ShoppingBag } from "lucide-react";
 import BarcodeScanner from "../../components/BarcodeScanner";
 import { useUsbScanner } from "../../hooks/useUsbScanner";
 import { useAuth } from "../../contexts/AuthContext";
@@ -162,9 +162,20 @@ export default function OrderForm() {
       <button onClick={() => nav(-1)} className="overline flex items-center gap-1 mb-3 hover:text-[var(--primary)]">
         <ChevronLeft size={14}/>Back
       </button>
-      <h1 className="font-display text-4xl tracking-tighter">
-        {isEdit ? `Edit ${originalOrder?.number || "…"}` : "New Invoice"}
-      </h1>
+      <div className="flex items-center justify-between gap-4 mb-1">
+        <h1 className="font-display text-4xl tracking-tighter">
+          {isEdit ? `Edit ${originalOrder?.number || "…"}` : "New Invoice"}
+        </h1>
+        {isEdit && !isAgent && (
+          <Link
+            to="/admin/catalog"
+            className="inline-flex items-center text-sm h-10 px-3 rounded-md border border-[var(--border)] hover:bg-black/5"
+            data-testid="goto-catalog-link"
+          >
+            <ShoppingBag size={14} className="mr-1.5"/>Browse catalog
+          </Link>
+        )}
+      </div>
       <p className="text-sm text-[var(--text-muted)] mt-1 mb-6">
         {isEdit ? "Edits adjust stock and customer credit automatically." : "Auto-applied pricing, taxes, and trade-ins."}
       </p>

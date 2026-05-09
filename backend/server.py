@@ -5,6 +5,8 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import os
+import io
+import csv
 import uuid
 import asyncio
 import logging
@@ -15,7 +17,8 @@ from typing import List, Optional, Literal, Tuple
 import bcrypt
 import jwt
 import resend
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -730,6 +733,152 @@ async def delete_product(product_id: str, _: dict = Depends(require_role("admin"
 
 
 # -----------------------------------------------------------------------------
+# Products import / export (CSV, no images)
+# -----------------------------------------------------------------------------
+PRODUCT_CSV_FIELDS = [
+    "sku", "barcode", "name", "description", "category", "unit",
+    "base_price", "stock", "low_stock_threshold", "active",
+    "tiers", "variants",
+]
+
+
+def _encode_tiers(tiers: List[dict]) -> str:
+    return "; ".join(f"{int(t['min_qty'])}:{float(t['price']):.2f}" for t in (tiers or []))
+
+
+def _decode_tiers(s: str) -> List[dict]:
+    out = []
+    for chunk in (s or "").split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if ":" not in chunk:
+            raise ValueError(f"Invalid tier '{chunk}' (expected min_qty:price)")
+        q, p = chunk.split(":", 1)
+        out.append({"min_qty": int(q.strip()), "price": float(p.strip())})
+    return out
+
+
+def _encode_variants(variants: List[dict]) -> str:
+    parts = []
+    for v in (variants or []):
+        parts.append("|".join([
+            v.get("label", ""),
+            v.get("sku", ""),
+            v.get("barcode", ""),
+            f"{float(v.get('price') or 0):.2f}",
+            str(int(v.get("stock") or 0)),
+            str(int(v.get("low_stock_threshold") or 10)),
+            "1" if v.get("active") is not False else "0",
+        ]))
+    return "; ".join(parts)
+
+
+def _decode_variants(s: str) -> List[dict]:
+    out = []
+    for chunk in (s or "").split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        cells = [c.strip() for c in chunk.split("|")]
+        if len(cells) < 4:
+            raise ValueError(f"Invalid variant '{chunk}' (need at least label|sku|barcode|price)")
+        cells += [""] * (7 - len(cells))
+        label, sku, barcode, price, stock, low, active = cells[:7]
+        out.append({
+            "id": str(uuid.uuid4()),
+            "label": label,
+            "sku": sku,
+            "barcode": barcode,
+            "price": float(price or 0),
+            "stock": int(stock or 0),
+            "low_stock_threshold": int(low or 10),
+            "active": (active or "1") not in ("0", "false", "False", ""),
+        })
+    return out
+
+
+@api_router.get("/products/export")
+async def export_products(_: dict = Depends(require_role("admin", "employee"))):
+    items = await db.products.find({}, {"_id": 0}).to_list(5000)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=PRODUCT_CSV_FIELDS)
+    w.writeheader()
+    for p in items:
+        w.writerow({
+            "sku": p.get("sku", ""),
+            "barcode": p.get("barcode", ""),
+            "name": p.get("name", ""),
+            "description": p.get("description", ""),
+            "category": p.get("category", ""),
+            "unit": p.get("unit", ""),
+            "base_price": f"{float(p.get('base_price') or 0):.2f}",
+            "stock": int(p.get("stock") or 0),
+            "low_stock_threshold": int(p.get("low_stock_threshold") or 10),
+            "active": "1" if p.get("active", True) else "0",
+            "tiers": _encode_tiers(p.get("tiers") or []),
+            "variants": _encode_variants(p.get("variants") or []),
+        })
+    buf.seek(0)
+    fname = f"products-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@api_router.post("/products/import")
+async def import_products(file: UploadFile = File(...), _: dict = Depends(require_role("admin"))):
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a .csv file")
+    raw = (await file.read()).decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(raw))
+    if not reader.fieldnames or "sku" not in [f.strip().lower() for f in reader.fieldnames]:
+        raise HTTPException(status_code=400, detail="CSV must contain a 'sku' column")
+
+    created = 0
+    updated = 0
+    errors: List[dict] = []
+    for idx, row in enumerate(reader, start=2):
+        try:
+            row = {(k or "").strip().lower(): (v if v is not None else "").strip() for k, v in row.items()}
+            sku = row.get("sku") or ""
+            if not sku:
+                raise ValueError("Missing SKU")
+            payload = {
+                "sku": sku,
+                "barcode": row.get("barcode", ""),
+                "name": row.get("name", "") or sku,
+                "description": row.get("description", ""),
+                "category": row.get("category", "") or "General",
+                "unit": row.get("unit", "") or "pcs",
+                "base_price": float(row.get("base_price") or 0),
+                "stock": int(float(row.get("stock") or 0)),
+                "low_stock_threshold": int(float(row.get("low_stock_threshold") or 10)),
+                "active": (row.get("active") or "1") not in ("0", "false", "False"),
+                "tiers": _decode_tiers(row.get("tiers", "")),
+                "variants": _decode_variants(row.get("variants", "")),
+            }
+            existing = await db.products.find_one({"sku": sku}, {"_id": 0})
+            if existing:
+                # Preserve images, id, created_at
+                payload["images"] = existing.get("images", [])
+                await db.products.update_one({"id": existing["id"]}, {"$set": payload})
+                updated += 1
+            else:
+                payload["id"] = str(uuid.uuid4())
+                payload["images"] = []
+                payload["created_at"] = iso(now_utc())
+                await db.products.insert_one(payload)
+                created += 1
+        except Exception as e:
+            errors.append({"row": idx, "sku": (row.get("sku") if isinstance(row, dict) else "?") or "", "error": str(e)})
+
+    return {"created": created, "updated": updated, "errors": errors}
+
+
+# -----------------------------------------------------------------------------
 # Tax Jurisdictions
 # -----------------------------------------------------------------------------
 @api_router.get("/tax-jurisdictions", response_model=List[TaxJurisdiction])
@@ -1062,6 +1211,63 @@ def _agent_filter(current: dict) -> dict:
     if current["role"] == "sales_agent":
         return {"created_by": current["id"]}
     return {}
+
+
+@api_router.get("/orders/export")
+async def export_orders(
+    type: Optional[OrderType] = None,
+    include_deleted: bool = False,
+    current: dict = Depends(require_role("admin", "employee")),
+):
+    q: dict = _agent_filter(current)
+    if type:
+        q["type"] = type
+    if not include_deleted:
+        q["$or"] = [{"deleted_at": None}, {"deleted_at": {"$exists": False}}]
+    items = await db.orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    fields = [
+        "number", "type", "created_at", "customer_name", "created_by_name",
+        "subtotal", "trade_in_total", "credit_applied", "tax",
+        "tax_jurisdiction_name", "total", "status", "payment_status",
+        "amount_paid", "balance_due", "due_date", "items_summary", "notes",
+    ]
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields)
+    w.writeheader()
+    for o in items:
+        items_summary = "; ".join(
+            f"{it.get('sku') or ''} {it.get('name','')}"
+            + (f" · {it.get('variant_label')}" if it.get('variant_label') else "")
+            + f" × {int(it.get('quantity') or 0)} @ {float(it.get('unit_price') or 0):.2f}"
+            for it in (o.get("items") or [])
+        )
+        w.writerow({
+            "number": o.get("number", ""),
+            "type": o.get("type", ""),
+            "created_at": o.get("created_at", ""),
+            "customer_name": o.get("customer_name", ""),
+            "created_by_name": o.get("created_by_name", ""),
+            "subtotal": f"{float(o.get('subtotal') or 0):.2f}",
+            "trade_in_total": f"{float(o.get('trade_in_total') or 0):.2f}",
+            "credit_applied": f"{float(o.get('credit_applied') or 0):.2f}",
+            "tax": f"{float(o.get('tax') or 0):.2f}",
+            "tax_jurisdiction_name": o.get("tax_jurisdiction_name", ""),
+            "total": f"{float(o.get('total') or 0):.2f}",
+            "status": o.get("status", ""),
+            "payment_status": o.get("payment_status", ""),
+            "amount_paid": f"{float(o.get('amount_paid') or 0):.2f}",
+            "balance_due": f"{float(o.get('balance_due') or 0):.2f}",
+            "due_date": o.get("due_date") or "",
+            "items_summary": items_summary,
+            "notes": o.get("notes", ""),
+        })
+    buf.seek(0)
+    fname = f"invoices-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @api_router.get("/orders", response_model=List[OrderOut])
