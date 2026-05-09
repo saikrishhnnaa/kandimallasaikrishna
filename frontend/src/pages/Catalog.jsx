@@ -57,12 +57,30 @@ export default function Catalog() {
   const [variantPick, setVariantPick] = useState({}); // product_id -> variant_id
   const [qtyPick, setQtyPick] = useState({}); // product_id -> qty
 
-  const [cart, setCart] = useState([]); // [{product_id, variant_id, quantity}]
+  const cartStorageKey = `pos_cart_${user?.id || "anon"}`;
+  const [cart, setCart] = useState(() => {
+    try {
+      const raw = localStorage.getItem(cartStorageKey);
+      return raw ? JSON.parse(raw) : [];
+    } catch (_) { return []; }
+  });
   const [cartOpen, setCartOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
-  const [customerId, setCustomerId] = useState("");
+  const [customerId, setCustomerId] = useState(() => {
+    try { return localStorage.getItem(`${cartStorageKey}_customer`) || ""; } catch (_) { return ""; }
+  });
   const [preview, setPreview] = useState(null);
   const type = "invoice";
+
+  // Persist cart and customer to localStorage whenever they change
+  useEffect(() => {
+    if (!hydrated) { setHydrated(true); return; }
+    try { localStorage.setItem(cartStorageKey, JSON.stringify(cart)); } catch (_) { /* ignore */ }
+  }, [cart, cartStorageKey, hydrated]);
+  useEffect(() => {
+    try { localStorage.setItem(`${cartStorageKey}_customer`, customerId); } catch (_) { /* ignore */ }
+  }, [customerId, cartStorageKey]);
 
   useEffect(() => {
     api.get("/products").then((r) => setProducts(r.data));
@@ -160,6 +178,11 @@ export default function Catalog() {
       });
       toast.success(`${data.number} created`);
       setCart([]);
+      setCustomerId("");
+      try {
+        localStorage.removeItem(cartStorageKey);
+        localStorage.removeItem(`${cartStorageKey}_customer`);
+      } catch (_) { /* ignore */ }
       setCartOpen(false);
       if (isAgent) nav("/agent/sales");
       else nav(`/admin/orders/${data.id}`);
@@ -194,7 +217,12 @@ export default function Catalog() {
               </Button>
             </SheetTrigger>
             <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto">
-              <SheetHeader><SheetTitle className="font-display tracking-tight">Your cart</SheetTitle></SheetHeader>
+              <SheetHeader>
+                <SheetTitle className="font-display tracking-tight">Your cart</SheetTitle>
+                {cart.length > 0 && (
+                  <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider">Auto-saved · resumes after refresh / navigation</p>
+                )}
+              </SheetHeader>
               <div className="space-y-3 mt-4">
                 {cart.length === 0 && (
                   <p className="text-sm text-[var(--text-muted)] py-8 text-center">Cart is empty.</p>
@@ -262,6 +290,19 @@ export default function Catalog() {
                   <Button onClick={() => checkout(true)} variant="outline" className="w-full h-10" data-testid="catalog-checkout-edit-button">
                     Edit in form first
                   </Button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!window.confirm("Clear all items from cart?")) return;
+                      setCart([]);
+                      try { localStorage.removeItem(cartStorageKey); } catch (_) { /* ignore */ }
+                      toast.success("Cart cleared");
+                    }}
+                    className="w-full text-xs text-[var(--text-muted)] hover:text-[var(--danger)] py-2"
+                    data-testid="catalog-clear-cart-button"
+                  >
+                    Clear cart
+                  </button>
                 </div>
               )}
             </SheetContent>
