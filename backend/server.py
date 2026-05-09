@@ -286,7 +286,9 @@ class Product(BaseModel):
     name: str
     description: str = ""
     category: str = "General"
+    flavour: str = ""
     unit: str = "pcs"
+    units_per_box: int = 1
     base_price: float
     msrp: Optional[float] = None
     distribution_price: Optional[float] = None
@@ -306,7 +308,9 @@ class ProductCreate(BaseModel):
     name: str
     description: str = ""
     category: str = "General"
+    flavour: str = ""
     unit: str = "pcs"
+    units_per_box: int = 1
     base_price: float
     msrp: Optional[float] = None
     distribution_price: Optional[float] = None
@@ -324,7 +328,9 @@ class ProductUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
+    flavour: Optional[str] = None
     unit: Optional[str] = None
+    units_per_box: Optional[int] = None
     base_price: Optional[float] = None
     msrp: Optional[float] = None
     distribution_price: Optional[float] = None
@@ -746,7 +752,7 @@ async def delete_product(product_id: str, _: dict = Depends(require_role("admin"
 # Products import / export (CSV, no images)
 # -----------------------------------------------------------------------------
 PRODUCT_CSV_FIELDS = [
-    "sku", "barcode", "name", "description", "category", "unit",
+    "sku", "barcode", "name", "description", "category", "flavour", "unit", "units_per_box",
     "base_price", "msrp", "distribution_price", "wholesale_price",
     "stock", "low_stock_threshold", "active",
     "tiers", "variants",
@@ -825,7 +831,9 @@ async def export_products(_: dict = Depends(require_role("admin", "employee"))):
             "name": p.get("name", ""),
             "description": p.get("description", ""),
             "category": p.get("category", ""),
+            "flavour": p.get("flavour", ""),
             "unit": p.get("unit", ""),
+            "units_per_box": int(p.get("units_per_box") or 1),
             "base_price": f"{float(p.get('base_price') or 0):.2f}",
             "msrp": _f("msrp"),
             "distribution_price": _f("distribution_price"),
@@ -869,7 +877,9 @@ async def import_products(file: UploadFile = File(...), _: dict = Depends(requir
                 "name": row.get("name", "") or sku,
                 "description": row.get("description", ""),
                 "category": row.get("category", "") or "General",
+                "flavour": row.get("flavour", ""),
                 "unit": row.get("unit", "") or "pcs",
+                "units_per_box": int(float(row.get("units_per_box") or 1)),
                 "base_price": float(row.get("base_price") or 0),
                 "msrp": float(row.get("msrp")) if row.get("msrp") else None,
                 "distribution_price": float(row.get("distribution_price")) if row.get("distribution_price") else None,
@@ -2189,6 +2199,8 @@ async def on_startup():
     await db.customers.update_many({"credit_balance": {"$exists": False}}, {"$set": {"credit_balance": 0.0}})
     await db.customers.update_many({"default_tax_jurisdiction_id": {"$exists": False}}, {"$set": {"default_tax_jurisdiction_id": None}})
     await db.products.update_many({"images": {"$exists": False}}, {"$set": {"images": []}})
+    await db.products.update_many({"flavour": {"$exists": False}}, {"$set": {"flavour": ""}})
+    await db.products.update_many({"units_per_box": {"$exists": False}}, {"$set": {"units_per_box": 1}})
     await db.orders.update_many({"deleted_at": {"$exists": False}}, {"$set": {"deleted_at": None}})
     await db.orders.update_many({"trade_ins": {"$exists": False}}, {"$set": {"trade_ins": [], "trade_in_total": 0.0, "credit_applied": 0.0}})
     await db.orders.update_many({"agent_can_edit": {"$exists": False}}, {"$set": {"agent_can_edit": False}})

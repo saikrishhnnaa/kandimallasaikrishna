@@ -13,8 +13,9 @@ import { Plus, Pencil, Trash2, X, ScanLine, Upload, Star, FileDown, FileUp } fro
 import BarcodeScanner from "../../components/BarcodeScanner";
 
 const empty = {
-  sku: "", barcode: "", name: "", description: "", category: "General", unit: "pcs",
-  base_price: 0, stock: 0, low_stock_threshold: 10, tiers: [], images: [],
+  sku: "", barcode: "", name: "", description: "", category: "General", flavour: "", unit: "pcs",
+  units_per_box: 1, base_price: 0, msrp: "", distribution_price: "", wholesale_price: "",
+  stock: 0, low_stock_threshold: 10, tiers: [], images: [],
 };
 
 export default function Products() {
@@ -74,6 +75,7 @@ export default function Products() {
     try {
       const payload = {
         ...form,
+        units_per_box: Math.max(1, Number(form.units_per_box) || 1),
         base_price: Number(form.base_price),
         msrp: form.msrp === "" || form.msrp == null ? null : Number(form.msrp),
         distribution_price: form.distribution_price === "" || form.distribution_price == null ? null : Number(form.distribution_price),
@@ -183,43 +185,54 @@ export default function Products() {
                 </DialogTitle>
               </DialogHeader>
               <div className="grid grid-cols-2 gap-4 mt-3">
-                <Field label="SKU"><Input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} data-testid="product-sku-input"/></Field>
-                <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="product-name-input"/></Field>
                 <div className="col-span-2">
-                  <Label className="overline">Barcode (UPC / EAN / Code128)</Label>
-                  <div className="mt-2 flex gap-2">
-                    <Input
-                      value={form.barcode}
-                      onChange={(e) => setForm({ ...form, barcode: e.target.value })}
-                      placeholder="Scan or type — leave blank to use SKU"
-                      className="flex-1 font-mono"
-                      data-testid="product-barcode-input"
-                    />
-                    <Button type="button" variant="outline" onClick={() => setScanOpen(true)} data-testid="product-scan-button">
-                      <ScanLine size={14} className="mr-1.5"/>Scan
-                    </Button>
+                  <Label className="overline">Product name</Label>
+                  <Input className="mt-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="product-name-input" placeholder="e.g. Premium Cola"/>
+                </div>
+                <div className="col-span-2">
+                  <Label className="overline">SKU & barcode</Label>
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} data-testid="product-sku-input" placeholder="SKU (e.g. COLA-500ML)" className="font-mono"/>
+                    <div className="flex gap-2">
+                      <Input
+                        value={form.barcode}
+                        onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                        placeholder="Barcode (scan or type)"
+                        className="flex-1 font-mono"
+                        data-testid="product-barcode-input"
+                      />
+                      <Button type="button" variant="outline" onClick={() => setScanOpen(true)} data-testid="product-scan-button" title="Scan barcode">
+                        <ScanLine size={14}/>
+                      </Button>
+                    </div>
                   </div>
                 </div>
+                <Field label="Flavour"><Input value={form.flavour || ""} onChange={(e) => setForm({ ...form, flavour: e.target.value })} data-testid="product-flavour-input" placeholder="e.g. Cola, Mint, Strawberry"/></Field>
                 <Field label="Category"><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}/></Field>
-                <Field label="Unit"><Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}/></Field>
-                <Field label="Base price"><Input type="number" step="0.01" value={form.base_price} onChange={(e) => setForm({ ...form, base_price: e.target.value })} data-testid="product-price-input"/></Field>
                 <Field label="Stock"><Input type="number" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} data-testid="product-stock-input"/></Field>
+                <Field label="Units per box"><Input type="number" min="1" value={form.units_per_box || 1} onChange={(e) => setForm({ ...form, units_per_box: e.target.value })} data-testid="product-units-per-box-input"/></Field>
                 <Field label="Low-stock threshold"><Input type="number" value={form.low_stock_threshold} onChange={(e) => setForm({ ...form, low_stock_threshold: e.target.value })}/></Field>
+                <Field label="Unit"><Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="pcs, box, kg…"/></Field>
+
                 <div className="col-span-2 border-t border-[var(--border)] pt-4 mt-2">
-                  <p className="overline mb-1">Pricing tiers (named)</p>
-                  <p className="text-xs text-[var(--text-muted)] mb-3">One-click pricing options shown next to each line on the invoice. Leave blank to hide a tier.</p>
-                  <div className="grid grid-cols-3 gap-3">
+                  <p className="overline mb-1">Pricing</p>
+                  <p className="text-xs text-[var(--text-muted)] mb-3">MSRP / Distribution / Wholesale appear as one-click tier shortcuts on each invoice line. Retail is the default.</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <Field label="MSRP">
-                      <Input type="number" step="0.01" value={form.msrp ?? ""} onChange={(e) => setForm({ ...form, msrp: e.target.value })} data-testid="product-msrp-input" placeholder="—"/>
+                      <Input type="number" step="0.01" value={form.msrp ?? ""} onChange={(e) => setForm({ ...form, msrp: e.target.value })} data-testid="product-msrp-input" placeholder="—" className="font-mono"/>
                     </Field>
                     <Field label="Distribution">
-                      <Input type="number" step="0.01" value={form.distribution_price ?? ""} onChange={(e) => setForm({ ...form, distribution_price: e.target.value })} data-testid="product-distribution-input" placeholder="—"/>
+                      <Input type="number" step="0.01" value={form.distribution_price ?? ""} onChange={(e) => setForm({ ...form, distribution_price: e.target.value })} data-testid="product-distribution-input" placeholder="—" className="font-mono"/>
                     </Field>
                     <Field label="Wholesale">
-                      <Input type="number" step="0.01" value={form.wholesale_price ?? ""} onChange={(e) => setForm({ ...form, wholesale_price: e.target.value })} data-testid="product-wholesale-input" placeholder="—"/>
+                      <Input type="number" step="0.01" value={form.wholesale_price ?? ""} onChange={(e) => setForm({ ...form, wholesale_price: e.target.value })} data-testid="product-wholesale-input" placeholder="—" className="font-mono"/>
+                    </Field>
+                    <Field label="Retail price (default)">
+                      <Input type="number" step="0.01" value={form.base_price} onChange={(e) => setForm({ ...form, base_price: e.target.value })} data-testid="product-price-input" className="font-mono"/>
                     </Field>
                   </div>
                 </div>
+
                 <div className="col-span-2">
                   <Label className="overline">Description</Label>
                   <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="mt-2"/>

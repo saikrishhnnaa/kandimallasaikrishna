@@ -218,7 +218,7 @@ export default function OrderForm() {
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-[1400px] mx-auto" data-testid="order-form-page">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-[1400px] mx-auto pb-28 lg:pb-8" data-testid="order-form-page">
       <button onClick={() => nav(-1)} className="overline flex items-center gap-1 mb-3 hover:text-[var(--primary)]">
         <ChevronLeft size={14}/>Back
       </button>
@@ -227,8 +227,8 @@ export default function OrderForm() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 items-end mb-6">
         <div>
           <p className="overline">{isEdit ? `Edit ${originalOrder?.number || "…"}` : "New invoice"}</p>
-          <h1 className="font-display text-4xl lg:text-5xl tracking-tighter mt-1 flex items-center gap-3">
-            <ShoppingCart size={36} className="text-[var(--primary)]" strokeWidth={1.5}/>
+          <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl tracking-tighter mt-1 flex items-center gap-3">
+            <ShoppingCart size={32} className="text-[var(--primary)]" strokeWidth={1.5}/>
             Your shopping cart
           </h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">
@@ -240,7 +240,7 @@ export default function OrderForm() {
           onClick={submit}
           disabled={!preview}
           data-testid="submit-order-button"
-          className="group relative overflow-hidden rounded-xl px-6 lg:px-8 py-5 bg-[var(--text)] hover:bg-black text-white text-left disabled:opacity-50 disabled:cursor-not-allowed min-w-[280px]"
+          className="hidden lg:block group relative overflow-hidden rounded-xl px-6 lg:px-8 py-5 bg-[var(--text)] hover:bg-black text-white text-left disabled:opacity-50 disabled:cursor-not-allowed min-w-[280px]"
         >
           <div className="overline text-white/60 mb-1">Total</div>
           <div className="flex items-center justify-between gap-6">
@@ -401,12 +401,12 @@ export default function OrderForm() {
             <thead className="bg-black/[0.02]">
               <tr className="text-left border-b border-[var(--border)]">
                 <th className="w-14"></th>
-                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)]">Category</th>
-                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] min-w-[260px]">Line item</th>
-                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)]">Pricing</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] hidden md:table-cell">Category</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] min-w-[200px]">Line item</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] hidden lg:table-cell">Pricing</th>
                 <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-20">Qty</th>
                 <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-32">Unit price</th>
-                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-28 text-right">Suggested</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-28 text-right hidden lg:table-cell">Suggested</th>
                 <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-28 text-right">Ext. price</th>
                 <th className="w-10"></th>
               </tr>
@@ -436,7 +436,7 @@ export default function OrderForm() {
                         {img ? <img src={img} alt="" className="w-full h-full object-cover"/> : <ImageIcon size={14} className="text-[var(--text-muted)]"/>}
                       </div>
                     </td>
-                    <td className="px-3 py-3 text-xs text-[var(--text-muted)] truncate max-w-[140px]">{prod?.category || "—"}</td>
+                    <td className="px-3 py-3 text-xs text-[var(--text-muted)] truncate max-w-[140px] hidden md:table-cell">{prod?.category || "—"}</td>
                     <td className="px-3 py-3">
                       <Select value={it.product_id} onValueChange={(v) => updateLine(idx, { product_id: v, variant_id: null })}>
                         <SelectTrigger data-testid={`line-product-${idx}`} className="h-9"><SelectValue placeholder="Choose product"/></SelectTrigger>
@@ -454,8 +454,37 @@ export default function OrderForm() {
                           </SelectContent>
                         </Select>
                       )}
+                      {/* Mobile-only tier badges (hidden on lg) */}
+                      {prod && (prod.msrp != null || prod.distribution_price != null || prod.wholesale_price != null) && (
+                        <div className="flex flex-wrap gap-1 mt-2 lg:hidden">
+                          <span className={`text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded ${tierColor}`}>
+                            {tier}
+                          </span>
+                          {prod.msrp != null && (
+                            <button type="button"
+                              onClick={() => updateLine(idx, { unit_price_override: prod.msrp })}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]">
+                              MSRP {formatCurrency(prod.msrp)}
+                            </button>
+                          )}
+                          {prod.distribution_price != null && (
+                            <button type="button"
+                              onClick={() => updateLine(idx, { unit_price_override: prod.distribution_price })}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]">
+                              Dist {formatCurrency(prod.distribution_price)}
+                            </button>
+                          )}
+                          {prod.wholesale_price != null && (
+                            <button type="button"
+                              onClick={() => updateLine(idx, { unit_price_override: prod.wholesale_price })}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]">
+                              W'sale {formatCurrency(prod.wholesale_price)}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-3 py-3 hidden lg:table-cell">
                       <span className={`text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded ${tierColor}`} data-testid={`line-tier-${idx}`}>
                         {tier}
                       </span>
@@ -502,7 +531,7 @@ export default function OrderForm() {
                         className="h-9 font-mono"
                         data-testid={`line-price-${idx}`}/>
                     </td>
-                    <td className="px-3 py-3 text-right font-mono text-xs text-[var(--text-muted)]">
+                    <td className="px-3 py-3 text-right font-mono text-xs text-[var(--text-muted)] hidden lg:table-cell">
                       {prod?.msrp != null ? formatCurrency(prod.msrp) : "—"}
                     </td>
                     <td className="px-3 py-3 text-right font-mono">
@@ -582,6 +611,25 @@ export default function OrderForm() {
       </div>
 
       <BarcodeScanner open={scanOpen} onOpenChange={setScanOpen} onDetected={handleScan} title="Scan product to add"/>
+
+      {/* Mobile sticky Total bar */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-[var(--text)] text-white shadow-2xl z-30">
+        <button
+          onClick={submit}
+          disabled={!preview}
+          data-testid="submit-order-button-mobile"
+          className="w-full px-5 py-4 flex items-center justify-between disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <div>
+            <div className="overline text-white/60 text-[10px]">Total · {totalQty} qty</div>
+            <div className="font-display text-2xl tracking-tighter">{formatCurrency(preview?.total || 0)}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="overline text-[10px] text-white/80">{isEdit ? "Save" : "Create"}</span>
+            <ArrowRight size={20}/>
+          </div>
+        </button>
+      </div>
     </div>
   );
 }
