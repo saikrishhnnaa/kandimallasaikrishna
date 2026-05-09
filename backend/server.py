@@ -288,6 +288,9 @@ class Product(BaseModel):
     category: str = "General"
     unit: str = "pcs"
     base_price: float
+    msrp: Optional[float] = None
+    distribution_price: Optional[float] = None
+    wholesale_price: Optional[float] = None
     tiers: List[PriceTier] = []
     variants: List[Variant] = []
     images: List[ProductImage] = []
@@ -305,6 +308,9 @@ class ProductCreate(BaseModel):
     category: str = "General"
     unit: str = "pcs"
     base_price: float
+    msrp: Optional[float] = None
+    distribution_price: Optional[float] = None
+    wholesale_price: Optional[float] = None
     tiers: List[PriceTier] = []
     variants: List[Variant] = []
     images: List[ProductImage] = []
@@ -320,6 +326,9 @@ class ProductUpdate(BaseModel):
     category: Optional[str] = None
     unit: Optional[str] = None
     base_price: Optional[float] = None
+    msrp: Optional[float] = None
+    distribution_price: Optional[float] = None
+    wholesale_price: Optional[float] = None
     tiers: Optional[List[PriceTier]] = None
     variants: Optional[List[Variant]] = None
     images: Optional[List[ProductImage]] = None
@@ -738,7 +747,8 @@ async def delete_product(product_id: str, _: dict = Depends(require_role("admin"
 # -----------------------------------------------------------------------------
 PRODUCT_CSV_FIELDS = [
     "sku", "barcode", "name", "description", "category", "unit",
-    "base_price", "stock", "low_stock_threshold", "active",
+    "base_price", "msrp", "distribution_price", "wholesale_price",
+    "stock", "low_stock_threshold", "active",
     "tiers", "variants",
 ]
 
@@ -806,6 +816,9 @@ async def export_products(_: dict = Depends(require_role("admin", "employee"))):
     w = csv.DictWriter(buf, fieldnames=PRODUCT_CSV_FIELDS)
     w.writeheader()
     for p in items:
+        def _f(k):
+            v = p.get(k)
+            return f"{float(v):.2f}" if v not in (None, "") else ""
         w.writerow({
             "sku": p.get("sku", ""),
             "barcode": p.get("barcode", ""),
@@ -814,6 +827,9 @@ async def export_products(_: dict = Depends(require_role("admin", "employee"))):
             "category": p.get("category", ""),
             "unit": p.get("unit", ""),
             "base_price": f"{float(p.get('base_price') or 0):.2f}",
+            "msrp": _f("msrp"),
+            "distribution_price": _f("distribution_price"),
+            "wholesale_price": _f("wholesale_price"),
             "stock": int(p.get("stock") or 0),
             "low_stock_threshold": int(p.get("low_stock_threshold") or 10),
             "active": "1" if p.get("active", True) else "0",
@@ -855,6 +871,9 @@ async def import_products(file: UploadFile = File(...), _: dict = Depends(requir
                 "category": row.get("category", "") or "General",
                 "unit": row.get("unit", "") or "pcs",
                 "base_price": float(row.get("base_price") or 0),
+                "msrp": float(row.get("msrp")) if row.get("msrp") else None,
+                "distribution_price": float(row.get("distribution_price")) if row.get("distribution_price") else None,
+                "wholesale_price": float(row.get("wholesale_price")) if row.get("wholesale_price") else None,
                 "stock": int(float(row.get("stock") or 0)),
                 "low_stock_threshold": int(float(row.get("low_stock_threshold") or 10)),
                 "active": (row.get("active") or "1") not in ("0", "false", "False"),

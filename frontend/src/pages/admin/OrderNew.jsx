@@ -347,6 +347,37 @@ export default function OrderForm() {
                         className="font-mono"
                         data-testid={`line-price-${idx}`}
                       />
+                      {prod && (prod.msrp || prod.distribution_price || prod.wholesale_price) && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {prod.msrp != null && (
+                            <button type="button"
+                              onClick={() => updateLine(idx, { unit_price_override: prod.msrp })}
+                              data-testid={`line-pricetier-msrp-${idx}`}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/[0.04] hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]"
+                              title="Apply MSRP">
+                              MSRP <span className="ml-0.5">{formatCurrency(prod.msrp)}</span>
+                            </button>
+                          )}
+                          {prod.distribution_price != null && (
+                            <button type="button"
+                              onClick={() => updateLine(idx, { unit_price_override: prod.distribution_price })}
+                              data-testid={`line-pricetier-dist-${idx}`}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/[0.04] hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]"
+                              title="Apply Distribution price">
+                              Dist <span className="ml-0.5">{formatCurrency(prod.distribution_price)}</span>
+                            </button>
+                          )}
+                          {prod.wholesale_price != null && (
+                            <button type="button"
+                              onClick={() => updateLine(idx, { unit_price_override: prod.wholesale_price })}
+                              data-testid={`line-pricetier-wholesale-${idx}`}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/[0.04] hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]"
+                              title="Apply Wholesale price">
+                              W'sale <span className="ml-0.5">{formatCurrency(prod.wholesale_price)}</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="col-span-1 text-right text-xs font-mono text-[var(--text-muted)]">
                       {lineFromPreview ? formatCurrency(lineFromPreview.line_total) : "—"}

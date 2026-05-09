@@ -75,6 +75,9 @@ export default function Products() {
       const payload = {
         ...form,
         base_price: Number(form.base_price),
+        msrp: form.msrp === "" || form.msrp == null ? null : Number(form.msrp),
+        distribution_price: form.distribution_price === "" || form.distribution_price == null ? null : Number(form.distribution_price),
+        wholesale_price: form.wholesale_price === "" || form.wholesale_price == null ? null : Number(form.wholesale_price),
         stock: Number(form.stock),
         low_stock_threshold: Number(form.low_stock_threshold),
         tiers: (form.tiers || [])
@@ -202,6 +205,21 @@ export default function Products() {
                 <Field label="Base price"><Input type="number" step="0.01" value={form.base_price} onChange={(e) => setForm({ ...form, base_price: e.target.value })} data-testid="product-price-input"/></Field>
                 <Field label="Stock"><Input type="number" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} data-testid="product-stock-input"/></Field>
                 <Field label="Low-stock threshold"><Input type="number" value={form.low_stock_threshold} onChange={(e) => setForm({ ...form, low_stock_threshold: e.target.value })}/></Field>
+                <div className="col-span-2 border-t border-[var(--border)] pt-4 mt-2">
+                  <p className="overline mb-1">Pricing tiers (named)</p>
+                  <p className="text-xs text-[var(--text-muted)] mb-3">One-click pricing options shown next to each line on the invoice. Leave blank to hide a tier.</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <Field label="MSRP">
+                      <Input type="number" step="0.01" value={form.msrp ?? ""} onChange={(e) => setForm({ ...form, msrp: e.target.value })} data-testid="product-msrp-input" placeholder="—"/>
+                    </Field>
+                    <Field label="Distribution">
+                      <Input type="number" step="0.01" value={form.distribution_price ?? ""} onChange={(e) => setForm({ ...form, distribution_price: e.target.value })} data-testid="product-distribution-input" placeholder="—"/>
+                    </Field>
+                    <Field label="Wholesale">
+                      <Input type="number" step="0.01" value={form.wholesale_price ?? ""} onChange={(e) => setForm({ ...form, wholesale_price: e.target.value })} data-testid="product-wholesale-input" placeholder="—"/>
+                    </Field>
+                  </div>
+                </div>
                 <div className="col-span-2">
                   <Label className="overline">Description</Label>
                   <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="mt-2"/>
