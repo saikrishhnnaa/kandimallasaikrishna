@@ -52,6 +52,33 @@ export default function OrderForm() {
         setCreditApplied(o.credit_applied || 0);
         setNotes(o.notes || "");
         setTaxJurisdictionId(o.tax_jurisdiction_id ?? "");
+
+        // If we returned from catalog with merge=<json items>, append them
+        const mergeRaw = searchParams.get("merge");
+        if (mergeRaw) {
+          try {
+            const incoming = JSON.parse(mergeRaw);
+            if (Array.isArray(incoming) && incoming.length) {
+              setItems((prev) => {
+                const next = [...prev];
+                for (const inc of incoming) {
+                  const idx = next.findIndex((x) =>
+                    x.product_id === inc.product_id &&
+                    (x.variant_id || null) === (inc.variant_id || null)
+                  );
+                  if (idx >= 0) next[idx] = { ...next[idx], quantity: Number(next[idx].quantity) + Number(inc.quantity || 1) };
+                  else next.push({ product_id: inc.product_id, variant_id: inc.variant_id || null, quantity: Number(inc.quantity || 1) });
+                }
+                return next;
+              });
+              toast.success(`${incoming.length} item${incoming.length > 1 ? "s" : ""} added from catalog`);
+              // strip the param so refresh doesn't re-merge
+              const url = new URL(window.location.href);
+              url.searchParams.delete("merge");
+              window.history.replaceState({}, "", url.toString());
+            }
+          } catch (_) { /* ignore */ }
+        }
       }).catch((e) => toast.error(formatApiError(e)));
     } else {
       // Prefill from catalog query params
@@ -226,6 +253,22 @@ export default function OrderForm() {
             <div className="flex items-center justify-between mb-4">
               <p className="overline">Line items</p>
               <div className="flex items-center gap-2">
+                {isEdit && !isAgent && (
+                  <Button
+                    variant="outline" size="sm"
+                    onClick={() => {
+                      try {
+                        sessionStorage.setItem("pos_addTo_invoice", id);
+                        sessionStorage.setItem("pos_addTo_invoice_number", originalOrder?.number || "");
+                      } catch (_) { /* ignore */ }
+                      nav(`/admin/catalog?addTo=${id}`);
+                    }}
+                    data-testid="order-add-from-catalog-button"
+                    className="border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--accent-soft)]"
+                  >
+                    <ShoppingBag size={14} className="mr-1"/>+ Add from catalog
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={() => setScanOpen(true)} data-testid="order-scan-button"><ScanLine size={14} className="mr-1"/>Scan</Button>
                 <Button variant="ghost" size="sm" onClick={addLine} data-testid="add-line-button"><Plus size={14} className="mr-1"/>Add line</Button>
               </div>

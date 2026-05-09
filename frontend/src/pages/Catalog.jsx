@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, formatApiError, formatCurrency } from "../lib/api";
 import { useAuth } from "../contexts/AuthContext";
 import { Button } from "../components/ui/button";
@@ -43,8 +43,25 @@ function primaryImage(p) {
 
 export default function Catalog() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const isAgent = user?.role === "sales_agent";
+
+  // "Add to existing invoice" mode
+  const addToInvoiceId = searchParams.get("addTo") || (() => {
+    try { return sessionStorage.getItem("pos_addTo_invoice") || ""; } catch (_) { return ""; }
+  })();
+  const addToInvoiceNumber = (() => {
+    try { return sessionStorage.getItem("pos_addTo_invoice_number") || ""; } catch (_) { return ""; }
+  })();
+  const isAddingToExisting = Boolean(addToInvoiceId);
+
+  const exitAddToMode = () => {
+    try {
+      sessionStorage.removeItem("pos_addTo_invoice");
+      sessionStorage.removeItem("pos_addTo_invoice_number");
+    } catch (_) { /* ignore */ }
+  };
 
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -61,7 +78,7 @@ export default function Catalog() {
   const [variantPick, setVariantPick] = useState({}); // product_id -> variant_id
   const [qtyPick, setQtyPick] = useState({}); // product_id -> qty
 
-  const cartStorageKey = `pos_cart_${user?.id || "anon"}`;
+  const cartStorageKey = `pos_cart_${user?.id || "anon"}${isAddingToExisting ? `_addTo_${addToInvoiceId}` : ""}`;
   const [cart, setCart] = useState(() => {
     try {
       const raw = localStorage.getItem(cartStorageKey);
@@ -173,6 +190,20 @@ export default function Catalog() {
   }, [cartOpen, customerId, cart]);
 
   const checkout = async (sendToForm = false) => {
+    if (isAddingToExisting) {
+      if (!cart.length) return toast.error("Cart is empty");
+      const items = cart.map((c) => ({ product_id: c.product_id, variant_id: c.variant_id || null, quantity: Number(c.quantity) }));
+      // Clear context + transient cart, then return to edit invoice with merge payload
+      try {
+        localStorage.removeItem(cartStorageKey);
+        localStorage.removeItem(`${cartStorageKey}_customer`);
+      } catch (_) { /* ignore */ }
+      exitAddToMode();
+      setCart([]);
+      const merge = encodeURIComponent(JSON.stringify(items));
+      nav(`/admin/orders/${addToInvoiceId}/edit?merge=${merge}`);
+      return;
+    }
     if (!customerId) return toast.error("Pick a customer");
     if (!cart.length) return toast.error("Cart is empty");
     if (sendToForm) {
@@ -253,6 +284,20 @@ export default function Catalog() {
 
   return (
     <div className={isAgent ? "p-4 pb-24" : "p-6 lg:p-8 max-w-[1500px] mx-auto"} data-testid="catalog-page">
+      {/* Add-to-existing-invoice banner */}
+      {isAddingToExisting && (
+        <div className="surface-card border-l-4 border-[var(--primary)] mb-4 px-4 py-3 flex items-center gap-3" data-testid="addto-banner">
+          <ShoppingCart size={16} className="text-[var(--primary)]"/>
+          <div className="text-sm flex-1">
+            <span className="text-[var(--text-muted)]">Adding products to invoice </span>
+            <span className="font-mono font-medium">{addToInvoiceNumber || addToInvoiceId.slice(0, 8)}</span>
+            <span className="text-[var(--text-muted)]"> · they'll be merged into the invoice when you tap "Add to invoice".</span>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => { exitAddToMode(); nav(`/admin/orders/${addToInvoiceId}/edit`); }} data-testid="addto-cancel">
+            Cancel
+          </Button>
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
         <div>
@@ -320,21 +365,23 @@ export default function Catalog() {
               </div>
               {cart.length > 0 && (
                 <div className="border-t border-[var(--border)] mt-5 pt-4 space-y-3">
-                  <div>
-                    <Label className="overline">Customer</Label>
-                    <Select value={customerId} onValueChange={setCustomerId}>
-                      <SelectTrigger className="mt-2 h-10" data-testid="catalog-customer-select"><SelectValue placeholder="Pick customer"/></SelectTrigger>
-                      <SelectContent>
-                        {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.company || c.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                    {customer && customer.default_tax_jurisdiction_id && (
-                      <p className="text-[10px] text-[var(--text-muted)] mt-1 font-mono">
-                        Tax: {jurisdictions.find((j) => j.id === customer.default_tax_jurisdiction_id)?.name || "—"}
-                      </p>
-                    )}
-                  </div>
-                  {preview && (
+                  {!isAddingToExisting && (
+                    <div>
+                      <Label className="overline">Customer</Label>
+                      <Select value={customerId} onValueChange={setCustomerId}>
+                        <SelectTrigger className="mt-2 h-10" data-testid="catalog-customer-select"><SelectValue placeholder="Pick customer"/></SelectTrigger>
+                        <SelectContent>
+                          {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.company || c.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      {customer && customer.default_tax_jurisdiction_id && (
+                        <p className="text-[10px] text-[var(--text-muted)] mt-1 font-mono">
+                          Tax: {jurisdictions.find((j) => j.id === customer.default_tax_jurisdiction_id)?.name || "—"}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {!isAddingToExisting && preview && (
                     <div className="text-sm space-y-1 bg-black/[0.02] rounded-md p-3 border border-[var(--border)]">
                       <div className="flex justify-between text-[var(--text-muted)]">
                         <span>Subtotal</span>
@@ -352,15 +399,23 @@ export default function Catalog() {
                       </div>
                     </div>
                   )}
-                  <Button onClick={() => checkout(false)} className="w-full h-11 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white" data-testid="catalog-checkout-button">
-                    Create invoice
-                  </Button>
-                  <Button onClick={() => checkout(true)} variant="outline" className="w-full h-10" data-testid="catalog-checkout-edit-button">
-                    Edit in form first
-                  </Button>
-                  <Button onClick={openSaveDraft} variant="outline" className="w-full h-10" data-testid="catalog-save-draft-button">
-                    <Save size={14} className="mr-1.5"/>{activeDraftId ? "Update draft" : "Save as draft"}
-                  </Button>
+                  {isAddingToExisting ? (
+                    <Button onClick={() => checkout(false)} className="w-full h-11 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white" data-testid="catalog-add-to-invoice-button">
+                      <Plus size={14} className="mr-1.5"/>Add to invoice {addToInvoiceNumber}
+                    </Button>
+                  ) : (
+                    <>
+                      <Button onClick={() => checkout(false)} className="w-full h-11 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white" data-testid="catalog-checkout-button">
+                        Create invoice
+                      </Button>
+                      <Button onClick={() => checkout(true)} variant="outline" className="w-full h-10" data-testid="catalog-checkout-edit-button">
+                        Edit in form first
+                      </Button>
+                      <Button onClick={openSaveDraft} variant="outline" className="w-full h-10" data-testid="catalog-save-draft-button">
+                        <Save size={14} className="mr-1.5"/>{activeDraftId ? "Update draft" : "Save as draft"}
+                      </Button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
