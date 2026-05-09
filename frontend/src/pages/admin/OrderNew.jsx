@@ -43,7 +43,7 @@ export default function OrderForm() {
         const o = r.data;
         setOriginalOrder(o);
         setCustomerId(o.customer_id);
-        setItems(o.items.map((it) => ({ product_id: it.product_id, quantity: it.quantity })));
+        setItems(o.items.map((it) => ({ product_id: it.product_id, variant_id: it.variant_id || null, quantity: it.quantity })));
         setTradeIns(o.trade_ins || []);
         setCreditApplied(o.credit_applied || 0);
         setType(o.type);
@@ -55,16 +55,19 @@ export default function OrderForm() {
   const handleScan = async (code) => {
     try {
       const { data } = await api.get(`/products/by-barcode/${encodeURIComponent(code)}`);
+      const product = data.product;
+      const variant = data.variant;
+      const matchKey = (it) => it.product_id === product.id && (it.variant_id || null) === (variant?.id || null);
       setItems((prev) => {
-        const idx = prev.findIndex((it) => it.product_id === data.id);
+        const idx = prev.findIndex(matchKey);
         if (idx >= 0) {
           const copy = [...prev];
           copy[idx] = { ...copy[idx], quantity: Number(copy[idx].quantity || 0) + 1 };
           return copy;
         }
-        return [...prev, { product_id: data.id, quantity: 1 }];
+        return [...prev, { product_id: product.id, variant_id: variant?.id || null, quantity: 1 }];
       });
-      toast.success(`Added: ${data.name}`);
+      toast.success(`Added: ${product.name}${variant ? " · " + variant.label : ""}`);
     } catch (e) { toast.error(formatApiError(e)); }
   };
   useUsbScanner(handleScan, true);
@@ -75,7 +78,7 @@ export default function OrderForm() {
     const valid = items.filter((i) => i.product_id && Number(i.quantity) > 0);
     api.post("/pricing/preview", {
       customer_id: customerId,
-      items: valid.map((i) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
+      items: valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) })),
       trade_ins: tradeIns,
       credit_applied: Number(creditApplied) || 0,
     }).then((r) => setPreview(r.data)).catch(() => setPreview(null));
@@ -103,7 +106,7 @@ export default function OrderForm() {
         restock: !!ti.restock, product_id: ti.product_id || null, sku: ti.sku || "", note: ti.note || "",
       }));
     try {
-      const itemsPayload = valid.map((i) => ({ product_id: i.product_id, quantity: Number(i.quantity) }));
+      const itemsPayload = valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) }));
       if (isEdit) {
         const { data } = await api.patch(`/orders/${id}`, {
           customer_id: customerId,
@@ -183,26 +186,44 @@ export default function OrderForm() {
               </div>
             </div>
             <div className="space-y-2">
-              {items.map((it, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                  <div className="col-span-7">
-                    <Select value={it.product_id} onValueChange={(v) => updateLine(idx, { product_id: v })}>
-                      <SelectTrigger data-testid={`line-product-${idx}`}><SelectValue placeholder="Choose product"/></SelectTrigger>
-                      <SelectContent>
-                        {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+              {items.map((it, idx) => {
+                const prod = products.find((p) => p.id === it.product_id);
+                const hasVariants = prod?.variants?.length > 0;
+                return (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                    <div className={hasVariants ? "col-span-5" : "col-span-7"}>
+                      <Select value={it.product_id} onValueChange={(v) => updateLine(idx, { product_id: v, variant_id: null })}>
+                        <SelectTrigger data-testid={`line-product-${idx}`}><SelectValue placeholder="Choose product"/></SelectTrigger>
+                        <SelectContent>
+                          {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {hasVariants && (
+                      <div className="col-span-2">
+                        <Select value={it.variant_id || ""} onValueChange={(v) => updateLine(idx, { variant_id: v })}>
+                          <SelectTrigger data-testid={`line-variant-${idx}`}><SelectValue placeholder="Variant"/></SelectTrigger>
+                          <SelectContent>
+                            {prod.variants.map((v) => (
+                              <SelectItem key={v.id} value={v.id}>
+                                {v.label} <span className="text-xs text-[var(--text-muted)] ml-1">· {v.stock} left</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    <div className="col-span-3">
+                      <Input type="number" min="1" placeholder="Qty" value={it.quantity}
+                        onChange={(e) => updateLine(idx, { quantity: e.target.value })}
+                        data-testid={`line-qty-${idx}`}/>
+                    </div>
+                    <div className="col-span-2 flex justify-end">
+                      <Button variant="ghost" size="icon" onClick={() => removeLine(idx)}><Trash2 size={14}/></Button>
+                    </div>
                   </div>
-                  <div className="col-span-3">
-                    <Input type="number" min="1" placeholder="Qty" value={it.quantity}
-                      onChange={(e) => updateLine(idx, { quantity: e.target.value })}
-                      data-testid={`line-qty-${idx}`}/>
-                  </div>
-                  <div className="col-span-2 flex justify-end">
-                    <Button variant="ghost" size="icon" onClick={() => removeLine(idx)}><Trash2 size={14}/></Button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {!items.length && <div className="text-center py-8 text-sm text-[var(--text-muted)]">No lines yet. Click "Add line".</div>}
             </div>
           </div>
@@ -280,10 +301,10 @@ export default function OrderForm() {
         <aside className="surface-card p-6 h-fit sticky top-4">
           <p className="overline mb-4">Summary</p>
           <div className="space-y-2">
-            {(preview?.items || []).map((p) => (
-              <div key={p.product_id} className="flex justify-between text-sm gap-2">
+            {(preview?.items || []).map((p, i) => (
+              <div key={`${p.product_id}-${p.variant_id || "_"}-${i}`} className="flex justify-between text-sm gap-2">
                 <div className="min-w-0">
-                  <div className="font-medium truncate">{p.name}</div>
+                  <div className="font-medium truncate">{p.name}{p.variant_label ? ` · ${p.variant_label}` : ""}</div>
                   <div className="text-xs text-[var(--text-muted)] font-mono">{p.quantity} × {formatCurrency(p.unit_price)}</div>
                 </div>
                 <div className="font-mono">{formatCurrency(p.line_total)}</div>

@@ -89,6 +89,22 @@
 - Sales agent /agent/sales: each order shows a 🔒 **Locked** badge by default; when an admin unlocks an order, a ✏️ **Edit** button appears, opens `/agent/orders/:id/edit` (mobile-friendly form, full edit capabilities — items, qty, trade-ins, credit, notes). Top-of-list banner shows "N order(s) unlocked for editing".
 - All existing edit-time guarantees (stock reconciliation, credit refund/re-apply, audit) apply identically when the agent saves.
 
+### v1.6 — Product Variants (sizes / flavours) (2026-05-09)
+- New `Variant` schema (id, label, sku, barcode, price, stock, low_stock_threshold, active). Each Product holds `variants: List[Variant] = []`.
+- **Pricing rule** (per spec 2i):
+  - Each variant has its own price.
+  - Bulk tiers + customer-specific prices stay at the **parent product** level and apply uniformly across all variants.
+- Order line items now carry `variant_id` + `variant_label`. Stock check / decrement / restock target the specific variant via `db.products.update_one({"id": pid, "variants.id": vid}, {"$inc": {"variants.$.stock": delta}})`.
+- Out-of-stock errors include the variant label: e.g. "Premium Cola · 1 L (have 0, need 5)".
+- `GET /api/products/by-barcode/{code}` now returns `{product, variant?}` — also matches variant SKUs and barcodes.
+- Frontend
+  - **Products dialog** — new "Variants (sizes / flavours)" section with grid editor (label, SKU, barcode, price, stock per variant). Free-text labels.
+  - **Products list** — shows `from $X.XX` pricing and `N variants · M tiers` summary; total stock = sum of variants.
+  - **Order form (admin + agent)** — when a product has variants, a second Select appears showing `Label · N left` per variant. Required before adding to cart.
+  - **Barcode scan** auto-adds the correct variant when the scanned code matches a variant SKU/barcode.
+  - **OrderDetail / OrderPrint** lines show `Product Name · Variant Label`.
+  - Stock movements log uses "Product · Variant" naming for variant changes.
+
 ## Backlog (Prioritised)
 - **P1** Print-friendly invoice / PDF download
 - **P1** Customer portal (their own quotes/invoices) — paves way for website integration

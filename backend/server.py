@@ -145,36 +145,56 @@ async def send_email(to: str, subject: str, html: str) -> bool:
 # Stock movements
 # -----------------------------------------------------------------------------
 async def apply_stock_change(
-    product_id: str, qty_delta: int, reason: str, reference: str, user: dict
+    product_id: str, qty_delta: int, reason: str, reference: str, user: dict,
+    variant_id: Optional[str] = None,
 ) -> Optional[dict]:
-    """Atomically increment stock and log a movement. Triggers low-stock alert."""
-    res = await db.products.find_one_and_update(
-        {"id": product_id},
-        {"$inc": {"stock": int(qty_delta)}},
-        return_document=True,
-        projection={"_id": 0},
-    )
-    if not res:
-        return None
+    """Atomically adjust product or variant stock and log a movement."""
+    if variant_id:
+        res = await db.products.find_one_and_update(
+            {"id": product_id, "variants.id": variant_id},
+            {"$inc": {"variants.$.stock": int(qty_delta)}},
+            return_document=True, projection={"_id": 0},
+        )
+        if not res:
+            return None
+        variant = next((v for v in res.get("variants", []) if v["id"] == variant_id), None)
+        if not variant:
+            return None
+        sku = variant["sku"]
+        name = f"{res['name']} · {variant['label']}"
+        stock_after = int(variant.get("stock", 0))
+        threshold = int(variant.get("low_stock_threshold", 10))
+    else:
+        res = await db.products.find_one_and_update(
+            {"id": product_id},
+            {"$inc": {"stock": int(qty_delta)}},
+            return_document=True, projection={"_id": 0},
+        )
+        if not res:
+            return None
+        sku = res.get("sku", "")
+        name = res.get("name", "")
+        stock_after = int(res.get("stock", 0))
+        threshold = int(res.get("low_stock_threshold", 10))
+
     await db.stock_movements.insert_one({
         "id": str(uuid.uuid4()),
         "product_id": product_id,
-        "sku": res.get("sku", ""),
-        "name": res.get("name", ""),
+        "variant_id": variant_id,
+        "sku": sku,
+        "name": name,
         "qty_delta": int(qty_delta),
         "reason": reason,
         "reference": reference or "",
-        "stock_after": int(res.get("stock", 0)),
+        "stock_after": stock_after,
         "created_by": user.get("id", "system"),
         "created_by_name": user.get("name", "System"),
         "created_at": iso(now_utc()),
     })
     if qty_delta < 0:
-        threshold = int(res.get("low_stock_threshold", 10))
-        cur = int(res.get("stock", 0))
-        prev = cur - int(qty_delta)
-        if cur <= threshold < prev:
-            asyncio.create_task(_low_stock_alert(res))
+        prev = stock_after - int(qty_delta)
+        if stock_after <= threshold < prev:
+            asyncio.create_task(_low_stock_alert({**res, "stock": stock_after, "name": name, "sku": sku, "low_stock_threshold": threshold}))
     return res
 
 
@@ -237,6 +257,17 @@ class PriceTier(BaseModel):
     price: float
 
 
+class Variant(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    label: str
+    sku: str
+    barcode: str = ""
+    price: float
+    stock: int = 0
+    low_stock_threshold: int = 10
+    active: bool = True
+
+
 class Product(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -248,6 +279,7 @@ class Product(BaseModel):
     unit: str = "pcs"
     base_price: float
     tiers: List[PriceTier] = []
+    variants: List[Variant] = []
     stock: int = 0
     low_stock_threshold: int = 10
     active: bool = True
@@ -263,6 +295,7 @@ class ProductCreate(BaseModel):
     unit: str = "pcs"
     base_price: float
     tiers: List[PriceTier] = []
+    variants: List[Variant] = []
     stock: int = 0
     low_stock_threshold: int = 10
 
@@ -276,6 +309,7 @@ class ProductUpdate(BaseModel):
     unit: Optional[str] = None
     base_price: Optional[float] = None
     tiers: Optional[List[PriceTier]] = None
+    variants: Optional[List[Variant]] = None
     stock: Optional[int] = None
     low_stock_threshold: Optional[int] = None
     active: Optional[bool] = None
@@ -333,13 +367,16 @@ class CustomerUpdate(BaseModel):
 
 class OrderItemIn(BaseModel):
     product_id: str
+    variant_id: Optional[str] = None
     quantity: int
 
 
 class OrderItem(BaseModel):
     product_id: str
+    variant_id: Optional[str] = None
     sku: str
     name: str
+    variant_label: str = ""
     quantity: int
     unit_price: float
     line_total: float
@@ -441,12 +478,12 @@ class PaymentOut(BaseModel):
 # -----------------------------------------------------------------------------
 # Pricing logic
 # -----------------------------------------------------------------------------
-async def resolve_price(product: dict, customer: dict, quantity: int) -> float:
-    # 1. Customer-specific
+async def resolve_price(product: dict, customer: dict, quantity: int, variant: Optional[dict] = None) -> float:
+    # 1. Customer-specific (at product level — applies to all variants)
     for cp in customer.get("custom_prices", []) or []:
         if cp.get("product_id") == product["id"]:
             return float(cp["price"])
-    # 2. Tiered pricing — best matching tier (highest min_qty <= qty)
+    # 2. Tiered pricing — parent-level, applies uniformly across variants
     best_tier_price = None
     best_tier_qty = -1
     for t in product.get("tiers", []) or []:
@@ -456,6 +493,9 @@ async def resolve_price(product: dict, customer: dict, quantity: int) -> float:
             best_tier_price = float(t["price"])
     if best_tier_price is not None:
         return best_tier_price
+    # 3. Variant or product base price
+    if variant:
+        return float(variant["price"])
     return float(product["base_price"])
 
 
@@ -547,19 +587,31 @@ async def list_products(user: dict = Depends(get_current_user)):
     return await cursor.to_list(2000)
 
 
-@api_router.get("/products/by-barcode/{code}", response_model=Product)
+@api_router.get("/products/by-barcode/{code}")
 async def get_product_by_barcode(code: str, _: dict = Depends(get_current_user)):
     code = code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Empty barcode")
-    # Match either barcode or SKU (USB scanners often hold internal SKUs too)
+    # Match product (barcode or SKU)
     p = await db.products.find_one(
         {"$or": [{"barcode": code}, {"sku": code}], "active": True},
         {"_id": 0},
     )
-    if not p:
-        raise HTTPException(status_code=404, detail=f"No product matches barcode '{code}'")
-    return p
+    if p:
+        return {"product": p, "variant": None}
+    # Match variant inside any product
+    p2 = await db.products.find_one(
+        {"$or": [{"variants.barcode": code}, {"variants.sku": code}], "active": True},
+        {"_id": 0},
+    )
+    if p2:
+        variant = next(
+            (v for v in p2.get("variants", []) if v.get("barcode") == code or v.get("sku") == code),
+            None,
+        )
+        if variant:
+            return {"product": p2, "variant": variant}
+    raise HTTPException(status_code=404, detail=f"No product matches barcode '{code}'")
 
 
 @api_router.post("/products", response_model=Product)
@@ -654,7 +706,7 @@ def _prefix_for(t: str) -> str:
 
 
 async def _compute_lines(items_in, customer: dict) -> tuple:
-    """Resolve unit prices and line totals for products."""
+    """Resolve unit prices and line totals for products + variants."""
     items: List[dict] = []
     subtotal = 0.0
     for it in items_in or []:
@@ -665,12 +717,24 @@ async def _compute_lines(items_in, customer: dict) -> tuple:
         qty = int(d["quantity"])
         if qty <= 0:
             raise HTTPException(status_code=400, detail="Quantity must be positive")
-        unit_price = await resolve_price(product, customer, qty)
+        variant = None
+        variant_id = d.get("variant_id")
+        if product.get("variants"):
+            if not variant_id:
+                raise HTTPException(status_code=400, detail=f"{product['name']} has variants — choose one")
+            variant = next((v for v in product["variants"] if v["id"] == variant_id), None)
+            if not variant:
+                raise HTTPException(status_code=400, detail="Variant not found")
+        elif variant_id:
+            variant_id = None
+        unit_price = await resolve_price(product, customer, qty, variant)
         line_total = round(unit_price * qty, 2)
         items.append({
             "product_id": product["id"],
-            "sku": product["sku"],
+            "variant_id": variant_id,
+            "sku": variant["sku"] if variant else product["sku"],
             "name": product["name"],
+            "variant_label": variant["label"] if variant else "",
             "quantity": qty,
             "unit_price": unit_price,
             "line_total": line_total,
@@ -783,20 +847,33 @@ async def _check_stock(items: List[dict]) -> None:
         p = await db.products.find_one({"id": it["product_id"]}, {"_id": 0})
         if not p:
             continue
-        if int(p.get("stock", 0)) < int(it["quantity"]):
-            short.append(f"{p['name']} (have {p.get('stock', 0)}, need {it['quantity']})")
+        if it.get("variant_id"):
+            v = next((vv for vv in p.get("variants", []) if vv["id"] == it["variant_id"]), None)
+            if not v:
+                continue
+            if int(v.get("stock", 0)) < int(it["quantity"]):
+                short.append(f"{p['name']} · {v['label']} (have {v.get('stock', 0)}, need {it['quantity']})")
+        else:
+            if int(p.get("stock", 0)) < int(it["quantity"]):
+                short.append(f"{p['name']} (have {p.get('stock', 0)}, need {it['quantity']})")
     if short:
         raise HTTPException(status_code=400, detail="Out of stock: " + "; ".join(short))
 
 
 async def _apply_decrements(items: List[dict], reference: str, user: dict) -> None:
     for it in items:
-        await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_created", reference, user)
+        await apply_stock_change(
+            it["product_id"], -int(it["quantity"]), "order_created", reference, user,
+            variant_id=it.get("variant_id"),
+        )
 
 
 async def _apply_restocks(items: List[dict], reference: str, user: dict, reason: str = "order_deleted") -> None:
     for it in items:
-        await apply_stock_change(it["product_id"], int(it["quantity"]), reason, reference, user)
+        await apply_stock_change(
+            it["product_id"], int(it["quantity"]), reason, reference, user,
+            variant_id=it.get("variant_id"),
+        )
 
 
 async def _apply_trade_in_restocks(trade_ins: List[dict], reference: str, user: dict, sign: int = 1) -> None:
@@ -1560,17 +1637,23 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
         if not p:
             continue
         qty = int(it.get("quantity", 1))
-        unit = await resolve_price(p, customer, qty)
+        variant = None
+        variant_id = it.get("variant_id")
+        if p.get("variants") and variant_id:
+            variant = next((v for v in p["variants"] if v["id"] == variant_id), None)
+        unit = await resolve_price(p, customer, qty, variant)
         line = round(unit * qty, 2)
         subtotal += line
         out.append({
             "product_id": p["id"],
-            "sku": p["sku"],
+            "variant_id": variant_id,
+            "sku": variant["sku"] if variant else p["sku"],
             "name": p["name"],
+            "variant_label": variant["label"] if variant else "",
             "quantity": qty,
             "unit_price": unit,
             "line_total": line,
-            "stock": p.get("stock", 0),
+            "stock": (variant or p).get("stock", 0),
         })
     trade_ins, trade_in_total = _compute_trade_ins(trade_ins_in)
     available_credit = float(customer.get("credit_balance") or 0.0)

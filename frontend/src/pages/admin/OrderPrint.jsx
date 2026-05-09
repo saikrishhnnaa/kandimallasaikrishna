@@ -97,7 +97,7 @@ export default function OrderPrint() {
                 {order.items.map((it, i) => (
                   <tr key={i} className="border-b border-[var(--border)]">
                     <td className="py-3 font-mono text-xs">{it.sku}</td>
-                    <td className="py-3">{it.name}</td>
+                    <td className="py-3">{it.name}{it.variant_label ? <span className="text-[var(--text-muted)] ml-2 text-xs">· {it.variant_label}</span> : null}</td>
                     <td className="py-3 text-right font-mono">{it.quantity}</td>
                     <td className="py-3 text-right font-mono">{formatCurrency(it.unit_price)}</td>
                     <td className="py-3 text-right font-mono">{formatCurrency(it.line_total)}</td>

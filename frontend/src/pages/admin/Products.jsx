@@ -32,7 +32,7 @@ export default function Products() {
   );
 
   const startCreate = () => { setEditing(null); setForm(empty); setOpen(true); };
-  const startEdit = (p) => { setEditing(p); setForm({ ...p, tiers: p.tiers || [] }); setOpen(true); };
+  const startEdit = (p) => { setEditing(p); setForm({ ...p, tiers: p.tiers || [], variants: p.variants || [] }); setOpen(true); };
 
   const submit = async () => {
     try {
@@ -44,6 +44,18 @@ export default function Products() {
         tiers: (form.tiers || [])
           .filter((t) => t.min_qty && t.price)
           .map((t) => ({ min_qty: Number(t.min_qty), price: Number(t.price) })),
+        variants: (form.variants || [])
+          .filter((v) => v.label && v.sku)
+          .map((v) => ({
+            id: v.id || crypto.randomUUID(),
+            label: v.label,
+            sku: v.sku,
+            barcode: v.barcode || "",
+            price: Number(v.price || 0),
+            stock: Number(v.stock || 0),
+            low_stock_threshold: Number(v.low_stock_threshold || 10),
+            active: v.active !== false,
+          })),
       };
       if (editing) await api.patch(`/products/${editing.id}`, payload);
       else await api.post("/products", payload);
@@ -142,6 +154,43 @@ export default function Products() {
                     ))}
                   </div>
                 </div>
+
+                <div className="col-span-2 border-t border-[var(--border)] pt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <Label className="overline">Variants (sizes / flavours)</Label>
+                      <p className="text-xs text-[var(--text-muted)] mt-1">Each variant has its own SKU, price and stock.</p>
+                    </div>
+                    <Button type="button" variant="ghost" size="sm" data-testid="add-variant-button"
+                      onClick={() => setForm({ ...form, variants: [...(form.variants || []), { id: crypto.randomUUID(), label: "", sku: "", barcode: "", price: form.base_price, stock: 0, low_stock_threshold: 10, active: true }] })}>
+                      + Add variant
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {(form.variants || []).map((v, idx) => (
+                      <div key={v.id || idx} className="grid grid-cols-12 gap-2">
+                        <Input className="col-span-3" placeholder="Label (e.g. 500ml)" value={v.label}
+                          data-testid={`variant-label-${idx}`}
+                          onChange={(e) => { const arr = [...form.variants]; arr[idx] = { ...arr[idx], label: e.target.value }; setForm({ ...form, variants: arr }); }}/>
+                        <Input className="col-span-2 font-mono" placeholder="SKU" value={v.sku}
+                          onChange={(e) => { const arr = [...form.variants]; arr[idx] = { ...arr[idx], sku: e.target.value }; setForm({ ...form, variants: arr }); }}/>
+                        <Input className="col-span-3 font-mono text-xs" placeholder="Barcode (optional)" value={v.barcode || ""}
+                          onChange={(e) => { const arr = [...form.variants]; arr[idx] = { ...arr[idx], barcode: e.target.value }; setForm({ ...form, variants: arr }); }}/>
+                        <Input className="col-span-1 font-mono" placeholder="Price" type="number" step="0.01" value={v.price}
+                          onChange={(e) => { const arr = [...form.variants]; arr[idx] = { ...arr[idx], price: e.target.value }; setForm({ ...form, variants: arr }); }}/>
+                        <Input className="col-span-2 font-mono" placeholder="Stock" type="number" value={v.stock}
+                          onChange={(e) => { const arr = [...form.variants]; arr[idx] = { ...arr[idx], stock: e.target.value }; setForm({ ...form, variants: arr }); }}/>
+                        <Button type="button" variant="ghost" size="icon" className="col-span-1"
+                          onClick={() => setForm({ ...form, variants: form.variants.filter((_, i) => i !== idx) })}>
+                          <X size={16}/>
+                        </Button>
+                      </div>
+                    ))}
+                    {!form.variants?.length && (
+                      <p className="text-xs text-[var(--text-muted)] italic">No variants. The product will be sold as a single SKU.</p>
+                    )}
+                  </div>
+                </div>
               </div>
               <DialogFooter className="mt-4">
                 <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
@@ -163,7 +212,7 @@ export default function Products() {
         <table className="w-full text-sm">
           <thead className="bg-black/[0.02]">
             <tr className="text-left border-b border-[var(--border)]">
-              {["SKU", "Barcode", "Name", "Category", "Stock", "Base price", "Tiers", ""].map((h) => (
+              {["SKU", "Barcode", "Name", "Category", "Stock", "Base price", "Variants", ""].map((h) => (
                 <th key={h} className="px-4 py-3 overline text-[var(--text-muted)] font-medium">{h}</th>
               ))}
             </tr>
@@ -176,12 +225,19 @@ export default function Products() {
                 <td className="px-4 py-3 font-medium">{p.name}</td>
                 <td className="px-4 py-3 text-[var(--text-muted)]">{p.category}</td>
                 <td className="px-4 py-3">
-                  <span className={`text-xs font-mono px-2 py-0.5 rounded ${p.stock <= p.low_stock_threshold ? "bg-[var(--danger)]/10 text-[var(--danger)]" : "bg-black/5"}`}>
-                    {p.stock} {p.unit}
-                  </span>
+                  {p.variants?.length > 0 ? (
+                    <div>
+                      <div className="text-[10px] font-mono text-[var(--text-muted)]">Sum: {p.variants.reduce((s, v) => s + (v.stock || 0), 0)} {p.unit}</div>
+                      <div className="text-[10px] font-mono text-[var(--text-muted)] mt-0.5">Variants ↓</div>
+                    </div>
+                  ) : (
+                    <span className={`text-xs font-mono px-2 py-0.5 rounded ${p.stock <= p.low_stock_threshold ? "bg-[var(--danger)]/10 text-[var(--danger)]" : "bg-black/5"}`}>
+                      {p.stock} {p.unit}
+                    </span>
+                  )}
                 </td>
-                <td className="px-4 py-3 font-mono">{formatCurrency(p.base_price)}</td>
-                <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{p.tiers?.length || 0}</td>
+                <td className="px-4 py-3 font-mono">{p.variants?.length > 0 ? <span className="text-[var(--text-muted)]">from {formatCurrency(Math.min(...p.variants.map((v) => v.price)))}</span> : formatCurrency(p.base_price)}</td>
+                <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{p.variants?.length > 0 ? `${p.variants.length} variants · ${p.tiers?.length || 0} tiers` : `${p.tiers?.length || 0} tiers`}</td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
                     <Button size="icon" variant="ghost" onClick={() => startEdit(p)} data-testid={`edit-product-${p.sku}`}><Pencil size={14}/></Button>

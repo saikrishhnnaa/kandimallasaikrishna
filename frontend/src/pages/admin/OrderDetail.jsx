@@ -238,7 +238,7 @@ export default function OrderDetail() {
             {order.items.map((it, i) => (
               <tr key={i} className="border-b border-[var(--border)] last:border-0">
                 <td className="px-4 py-3 font-mono text-xs">{it.sku}</td>
-                <td className="px-4 py-3">{it.name}</td>
+                <td className="px-4 py-3">{it.name}{it.variant_label ? <span className="text-[var(--text-muted)] ml-2 text-xs">· {it.variant_label}</span> : null}</td>
                 <td className="px-4 py-3 font-mono">{it.quantity}</td>
                 <td className="px-4 py-3 font-mono">{formatCurrency(it.unit_price)}</td>
                 <td className="px-4 py-3 font-mono text-right">{formatCurrency(it.line_total)}</td>
