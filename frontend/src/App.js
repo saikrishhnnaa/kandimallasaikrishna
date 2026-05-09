@@ -110,6 +110,7 @@ function App() {
             <Route index element={<AgentHome />} />
             <Route path="catalog" element={<AgentCatalog />} />
             <Route path="new-order" element={<AgentNewOrder />} />
+            <Route path="orders/:id/edit" element={<OrderNew />} />
             <Route path="sales" element={<AgentSales />} />
           </Route>
 

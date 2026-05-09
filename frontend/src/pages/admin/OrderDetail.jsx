@@ -5,6 +5,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
+import { Switch } from "../../components/ui/switch";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../../components/ui/dialog";
@@ -69,6 +70,14 @@ export default function OrderDetail() {
   const restore = async () => {
     try { await api.post(`/orders/${id}/restore`); toast.success("Restored"); load(); }
     catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const toggleAgentEdit = async (enabled) => {
+    try {
+      const { data } = await api.post(`/orders/${id}/agent-edit`, null, { params: { enabled } });
+      setOrder(data);
+      toast.success(enabled ? "Agent can now edit" : "Locked from agent");
+    } catch (e) { toast.error(formatApiError(e)); }
   };
 
   if (!order) return <div className="p-8 overline">Loading…</div>;
@@ -166,6 +175,19 @@ export default function OrderDetail() {
         <div className="surface-card p-4 mb-4 border-[var(--danger)]/30 bg-[var(--danger)]/[0.04]" data-testid="deleted-banner">
           <p className="overline text-[var(--danger)]">Deleted</p>
           <p className="text-sm mt-1">This {order.type} was deleted on {formatDate(order.deleted_at)}. Stock and credits were restored.</p>
+        </div>
+      )}
+
+      {!isDeleted && isEmployee && (
+        <div className="surface-card p-4 mb-4 flex items-center justify-between gap-4" data-testid="agent-edit-toggle">
+          <div>
+            <p className="overline">Agent edits</p>
+            <p className="text-xs text-[var(--text-muted)] mt-1">When ON, the sales agent who created this order can edit it.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono">{order.agent_can_edit ? "Unlocked" : "Locked"}</span>
+            <Switch checked={!!order.agent_can_edit} onCheckedChange={toggleAgentEdit} data-testid="agent-edit-switch"/>
+          </div>
         </div>
       )}
 

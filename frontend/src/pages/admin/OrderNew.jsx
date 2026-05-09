@@ -13,11 +13,14 @@ import { toast } from "sonner";
 import { Plus, Trash2, ChevronLeft, ScanLine, Repeat, Wallet } from "lucide-react";
 import BarcodeScanner from "../../components/BarcodeScanner";
 import { useUsbScanner } from "../../hooks/useUsbScanner";
+import { useAuth } from "../../contexts/AuthContext";
 
 export default function OrderForm() {
   const nav = useNavigate();
   const { id } = useParams();
+  const { user } = useAuth();
   const isEdit = Boolean(id);
+  const isAgent = user?.role === "sales_agent";
 
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
@@ -110,7 +113,7 @@ export default function OrderForm() {
           notes,
         });
         toast.success(`${data.number} updated`);
-        nav(`/admin/orders/${data.id}`);
+        nav(isAgent ? "/agent/sales" : `/admin/orders/${data.id}`);
       } else {
         const { data } = await api.post("/orders", {
           customer_id: customerId, type, notes,
@@ -119,7 +122,7 @@ export default function OrderForm() {
           credit_applied: Number(creditApplied) || 0,
         });
         toast.success(`${data.number} created`);
-        nav(`/admin/orders/${data.id}`);
+        nav(isAgent ? "/agent/sales" : `/admin/orders/${data.id}`);
       }
     } catch (e) { toast.error(formatApiError(e)); }
   };

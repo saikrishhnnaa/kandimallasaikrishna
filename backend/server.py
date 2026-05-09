@@ -415,6 +415,7 @@ class OrderOut(BaseModel):
     created_at: str
     converted_from: Optional[str] = None
     deleted_at: Optional[str] = None
+    agent_can_edit: bool = False
 
 
 class PaymentCreate(BaseModel):
@@ -772,6 +773,7 @@ async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
         "created_at": iso(now_utc()),
         "converted_from": None,
         "deleted_at": None,
+        "agent_can_edit": False,
     }
 
 
@@ -867,12 +869,22 @@ async def get_order_audit(order_id: str, _: dict = Depends(require_role("admin",
 
 
 @api_router.patch("/orders/{order_id}", response_model=OrderOut)
-async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends(require_role("admin", "employee"))):
+async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.get("deleted_at"):
         raise HTTPException(status_code=400, detail="Cannot edit a deleted order")
+
+    # Permission: admin/employee always; sales_agent only if owner AND agent_can_edit
+    if current["role"] == "sales_agent":
+        if not order.get("agent_can_edit"):
+            raise HTTPException(status_code=403, detail="This order is locked. Ask an admin to unlock it for editing.")
+        if order.get("created_by") != current["id"]:
+            raise HTTPException(status_code=403, detail="You can only edit your own orders")
+    elif current["role"] not in ("admin", "employee"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     is_active_stock = order["type"] in ("order", "invoice")
     customer_id = body.customer_id or order["customer_id"]
     customer = await db.customers.find_one({"id": customer_id}, {"_id": 0})
@@ -1034,6 +1046,26 @@ async def restore_order(order_id: str, current: dict = Depends(require_role("adm
         {"id": order_id}, {"$set": {"deleted_at": None}}, return_document=True, projection={"_id": 0}
     )
     await _audit(order_id, "restored", current, {})
+    return res
+
+
+@api_router.post("/orders/{order_id}/agent-edit", response_model=OrderOut)
+async def toggle_agent_edit(
+    order_id: str,
+    enabled: bool,
+    current: dict = Depends(require_role("admin", "employee")),
+):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Cannot toggle a deleted order")
+    res = await db.orders.find_one_and_update(
+        {"id": order_id},
+        {"$set": {"agent_can_edit": bool(enabled)}},
+        return_document=True, projection={"_id": 0},
+    )
+    await _audit(order_id, "agent_edit_unlocked" if enabled else "agent_edit_locked", current, {})
     return res
 
 
@@ -1581,6 +1613,7 @@ async def on_startup():
     await db.customers.update_many({"credit_balance": {"$exists": False}}, {"$set": {"credit_balance": 0.0}})
     await db.orders.update_many({"deleted_at": {"$exists": False}}, {"$set": {"deleted_at": None}})
     await db.orders.update_many({"trade_ins": {"$exists": False}}, {"$set": {"trade_ins": [], "trade_in_total": 0.0, "credit_applied": 0.0}})
+    await db.orders.update_many({"agent_can_edit": {"$exists": False}}, {"$set": {"agent_can_edit": False}})
 
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@wholesalepos.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")

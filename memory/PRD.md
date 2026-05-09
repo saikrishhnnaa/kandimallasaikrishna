@@ -81,6 +81,14 @@
 - **Previous outstanding line** on the printable invoice PDF — appears in the totals block as "Previous outstanding (N)" + "Total amount due" so customers see the full picture on a single page.
 - Customers list — added "Statement" (FileText) icon button per row to open the statement in a new tab.
 
+### v1.5 — Agent-Editable Invoices (per-order unlock) (2026-05-09)
+- New field `agent_can_edit` on every order (default `false`).
+- `POST /api/orders/{id}/agent-edit?enabled=<bool>` — admin/employee toggles the lock. Audit trail records `agent_edit_unlocked` / `agent_edit_locked`.
+- `PATCH /api/orders/{id}` permission widened: sales_agent can now edit their own order **only when** `agent_can_edit=true`. Otherwise returns 403 with a clear "ask admin to unlock" message.
+- Admin/Employee OrderDetail: new "Agent edits" card with Switch (Locked / Unlocked) at the top of the page.
+- Sales agent /agent/sales: each order shows a 🔒 **Locked** badge by default; when an admin unlocks an order, a ✏️ **Edit** button appears, opens `/agent/orders/:id/edit` (mobile-friendly form, full edit capabilities — items, qty, trade-ins, credit, notes). Top-of-list banner shows "N order(s) unlocked for editing".
+- All existing edit-time guarantees (stock reconciliation, credit refund/re-apply, audit) apply identically when the agent saves.
+
 ## Backlog (Prioritised)
 - **P1** Print-friendly invoice / PDF download
 - **P1** Customer portal (their own quotes/invoices) — paves way for website integration
