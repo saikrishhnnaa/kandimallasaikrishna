@@ -144,7 +144,7 @@ export default function AgentNewOrder() {
                 <Select value={it.product_id} onValueChange={(v) => {
                   const arr = [...items]; arr[idx] = { ...arr[idx], product_id: v, variant_id: null }; setItems(arr);
                 }}>
-                  <SelectTrigger className="h-11"><SelectValue placeholder="Choose product"/></SelectTrigger>
+                  <SelectTrigger className="h-11" data-testid={`agent-line-product-${idx}`}><SelectValue placeholder="Choose product"/></SelectTrigger>
                   <SelectContent>
                     {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
                   </SelectContent>
@@ -153,7 +153,7 @@ export default function AgentNewOrder() {
                   <Select value={it.variant_id || ""} onValueChange={(v) => {
                     const arr = [...items]; arr[idx] = { ...arr[idx], variant_id: v }; setItems(arr);
                   }}>
-                    <SelectTrigger className="h-11"><SelectValue placeholder="Choose variant"/></SelectTrigger>
+                    <SelectTrigger className="h-11" data-testid={`agent-line-variant-${idx}`}><SelectValue placeholder="Choose variant"/></SelectTrigger>
                     <SelectContent>
                       {prod.variants.map((v) => (
                         <SelectItem key={v.id} value={v.id}>{v.label} · {v.stock} left</SelectItem>

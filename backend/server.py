@@ -999,7 +999,7 @@ async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends
         await _check_stock(new_items)
         # Decrement new
         for it in new_items:
-            await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_edited", order["number"], current)
+            await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_edited", order["number"], current, variant_id=it.get("variant_id"))
         # Apply new trade-in restocks
         await _apply_trade_in_restocks(new_trade_ins, order["number"], current, sign=+1)
 

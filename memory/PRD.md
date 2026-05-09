@@ -104,6 +104,7 @@
   - **Barcode scan** auto-adds the correct variant when the scanned code matches a variant SKU/barcode.
   - **OrderDetail / OrderPrint** lines show `Product Name · Variant Label`.
   - Stock movements log uses "Product · Variant" naming for variant changes.
+- **2026-02 hotfix**: `PATCH /api/orders/{id}` now passes `variant_id` when re-decrementing edited line items so variant stock reconciles correctly (was decrementing parent `product.stock`). Verified by `/app/backend/tests/test_variants.py` (14/14 passing). Added `data-testid="agent-line-product-{idx}"` and `agent-line-variant-{idx}` on `AgentNewOrder.jsx` for parity with admin OrderNew.
 
 ## Backlog (Prioritised)
 - **P1** Print-friendly invoice / PDF download
