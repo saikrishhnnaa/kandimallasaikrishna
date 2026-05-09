@@ -30,12 +30,12 @@ export default function OrderForm() {
   const [items, setItems] = useState([]);
   const [tradeIns, setTradeIns] = useState([]);
   const [creditApplied, setCreditApplied] = useState(0);
-  const [type, setType] = useState("order");
   const [notes, setNotes] = useState("");
   const [taxJurisdictionId, setTaxJurisdictionId] = useState(undefined); // undefined = use customer default; "" = no tax; specific id = override
   const [preview, setPreview] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [originalOrder, setOriginalOrder] = useState(null);
+  const type = "invoice"; // Wholesale POS only deals with invoices now
 
   // Load existing order if editing
   useEffect(() => {
@@ -50,17 +50,14 @@ export default function OrderForm() {
         setItems(o.items.map((it) => ({ product_id: it.product_id, variant_id: it.variant_id || null, quantity: it.quantity })));
         setTradeIns(o.trade_ins || []);
         setCreditApplied(o.credit_applied || 0);
-        setType(o.type);
         setNotes(o.notes || "");
         setTaxJurisdictionId(o.tax_jurisdiction_id ?? "");
       }).catch((e) => toast.error(formatApiError(e)));
     } else {
       // Prefill from catalog query params
       const cidQ = searchParams.get("customer_id");
-      const typeQ = searchParams.get("type");
       const itemsQ = searchParams.get("items");
       if (cidQ) setCustomerId(cidQ);
-      if (typeQ) setType(typeQ);
       if (itemsQ) {
         try {
           const parsed = JSON.parse(itemsQ);
@@ -166,10 +163,10 @@ export default function OrderForm() {
         <ChevronLeft size={14}/>Back
       </button>
       <h1 className="font-display text-4xl tracking-tighter">
-        {isEdit ? `Edit ${originalOrder?.number || "…"}` : "New Sales Document"}
+        {isEdit ? `Edit ${originalOrder?.number || "…"}` : "New Invoice"}
       </h1>
       <p className="text-sm text-[var(--text-muted)] mt-1 mb-6">
-        {isEdit ? "Edits adjust stock and customer credit automatically." : "Create a quote, order, or invoice with auto-applied pricing."}
+        {isEdit ? "Edits adjust stock and customer credit automatically." : "Auto-applied pricing, taxes, and trade-ins."}
       </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
