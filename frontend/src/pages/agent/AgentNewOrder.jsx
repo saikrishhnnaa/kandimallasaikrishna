@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, formatApiError, formatCurrency } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -17,6 +17,7 @@ import { useUsbScanner } from "../../hooks/useUsbScanner";
 
 export default function AgentNewOrder() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
   const [customerId, setCustomerId] = useState("");
@@ -53,6 +54,23 @@ export default function AgentNewOrder() {
   };
   useEffect(() => { load(); }, []);
 
+  // Prefill from catalog query params
+  useEffect(() => {
+    const cidQ = searchParams.get("customer_id");
+    const itemsQ = searchParams.get("items");
+    if (cidQ) setCustomerId(cidQ);
+    if (itemsQ) {
+      try {
+        const parsed = JSON.parse(itemsQ);
+        if (Array.isArray(parsed)) {
+          setItems(parsed.map((i) => ({
+            product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity || 1),
+          })));
+        }
+      } catch (_) { /* ignore */ }
+    }
+  }, [searchParams]);
+
   useEffect(() => {
     if (!customerId || !items.length) { setPreview(null); return; }
     const valid = items.filter((i) => i.product_id && Number(i.quantity) > 0);
@@ -80,7 +98,7 @@ export default function AgentNewOrder() {
     if (!valid.length) return toast.error("Add a product");
     try {
       const { data } = await api.post("/orders", {
-        customer_id: customerId, type: "order", notes: "",
+        customer_id: customerId, type: "invoice", notes: "",
         items: valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) })),
       });
       toast.success(`${data.number} created`);
@@ -91,7 +109,7 @@ export default function AgentNewOrder() {
   return (
     <div className="p-4 pb-32" data-testid="agent-new-order">
       <p className="overline">Onsite</p>
-      <h1 className="font-display text-3xl tracking-tighter mt-1 mb-4">New Order</h1>
+      <h1 className="font-display text-3xl tracking-tighter mt-1 mb-4">New Invoice</h1>
 
       {/* Customer */}
       <div className="surface-card p-4 mb-3">
@@ -209,7 +227,7 @@ export default function AgentNewOrder() {
 
       <div className="fixed bottom-20 left-0 right-0 max-w-[480px] mx-auto px-4">
         <Button onClick={submit} className="w-full h-12 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white text-base font-medium" data-testid="agent-submit-order">
-          Place Order {preview ? `· ${formatCurrency(preview.total)}` : ""}
+          Place Invoice {preview ? `· ${formatCurrency(preview.total)}` : ""}
         </Button>
       </div>
 

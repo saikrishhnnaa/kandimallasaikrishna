@@ -61,8 +61,8 @@ export default function Catalog() {
   const [cartOpen, setCartOpen] = useState(false);
 
   const [customerId, setCustomerId] = useState("");
-  const [type, setType] = useState("order");
   const [preview, setPreview] = useState(null);
+  const type = "invoice";
 
   useEffect(() => {
     api.get("/products").then((r) => setProducts(r.data));
@@ -239,17 +239,6 @@ export default function Catalog() {
                       </p>
                     )}
                   </div>
-                  <div>
-                    <Label className="overline">Document type</Label>
-                    <Select value={type} onValueChange={setType}>
-                      <SelectTrigger className="mt-2 h-10" data-testid="catalog-type-select"><SelectValue/></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="quote">Quote</SelectItem>
-                        <SelectItem value="order">Sales Order</SelectItem>
-                        <SelectItem value="invoice">Invoice</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
                   {preview && (
                     <div className="text-sm space-y-1 bg-black/[0.02] rounded-md p-3 border border-[var(--border)]">
                       <div className="flex justify-between text-[var(--text-muted)]">
@@ -269,7 +258,7 @@ export default function Catalog() {
                     </div>
                   )}
                   <Button onClick={() => checkout(false)} className="w-full h-11 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white" data-testid="catalog-checkout-button">
-                    Create {type}
+                    Create invoice
                   </Button>
                   <Button onClick={() => checkout(true)} variant="outline" className="w-full h-10" data-testid="catalog-checkout-edit-button">
                     Edit in form first
@@ -383,11 +372,10 @@ export default function Catalog() {
                   )}
                   <div className="flex items-center gap-2 mt-auto">
                     <Input
-                      type="number" min="1" defaultValue="1"
-                      value={qtyPick[p.id] || ""}
+                      type="number" min="1"
+                      value={qtyPick[p.id] ?? "1"}
                       onChange={(e) => setQtyPick({ ...qtyPick, [p.id]: e.target.value })}
                       className="h-9 w-16 font-mono text-center"
-                      placeholder="1"
                       data-testid={`catalog-qty-${p.sku}`}
                     />
                     <Button

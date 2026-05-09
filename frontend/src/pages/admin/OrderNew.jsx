@@ -188,17 +188,6 @@ export default function OrderForm() {
                   </div>
                 )}
               </div>
-              <div>
-                <Label className="overline">Document type</Label>
-                <Select value={type} onValueChange={setType} disabled={isEdit}>
-                  <SelectTrigger className="mt-2" data-testid="order-type-select"><SelectValue/></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="quote">Quote</SelectItem>
-                    <SelectItem value="order">Sales Order</SelectItem>
-                    <SelectItem value="invoice">Invoice</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
               <div className="col-span-2">
                 <Label className="overline">Tax jurisdiction</Label>
                 <Select
@@ -376,7 +365,7 @@ export default function OrderForm() {
           <Button onClick={submit} disabled={!preview}
             className="w-full mt-5 h-11 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white"
             data-testid="submit-order-button">
-            {isEdit ? "Save changes" : `Create ${type}`}
+            {isEdit ? "Save changes" : "Create invoice"}
           </Button>
         </aside>
       </div>

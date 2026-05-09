@@ -42,12 +42,6 @@ export default function OrderDetail() {
   };
   useEffect(() => { load(); }, [id]);
 
-  const convert = async (target) => {
-    try { const { data } = await api.post(`/orders/${id}/convert`, null, { params: { target } });
-      toast.success(`Converted to ${data.number}`); nav(`/admin/orders/${data.id}`); }
-    catch (e) { toast.error(formatApiError(e)); }
-  };
-
   const recordPayment = async () => {
     try { await api.post("/payments", { order_id: id, amount: Number(pay.amount), method: pay.method, reference: pay.reference, notes: pay.notes });
       toast.success("Payment recorded"); setPayOpen(false); setPay({ amount: "", method: "cash", reference: "", notes: "" }); load(); }
@@ -81,7 +75,6 @@ export default function OrderDetail() {
   };
 
   if (!order) return <div className="p-8 overline">Loading…</div>;
-  const canConvert = (order.type === "quote") || (order.type === "order");
   const isEmployee = user.role === "admin" || user.role === "employee";
   const isDeleted = !!order.deleted_at;
 
@@ -117,15 +110,6 @@ export default function OrderDetail() {
             <Button variant="outline" onClick={emailInvoice} data-testid="email-invoice-button">
               <Mail size={14} className="mr-1.5"/>Email
             </Button>
-          )}
-          {!isDeleted && canConvert && order.type === "quote" && isEmployee && (
-            <>
-              <Button variant="outline" onClick={() => convert("order")} data-testid="convert-order-button">→ Order</Button>
-              <Button variant="outline" onClick={() => convert("invoice")} data-testid="convert-invoice-button">→ Invoice</Button>
-            </>
-          )}
-          {!isDeleted && order.type === "order" && isEmployee && (
-            <Button variant="outline" onClick={() => convert("invoice")} data-testid="convert-invoice-button">→ Invoice</Button>
           )}
           {!isDeleted && order.type === "invoice" && isEmployee && order.payment_status !== "paid" && (
             <Dialog open={payOpen} onOpenChange={setPayOpen}>
