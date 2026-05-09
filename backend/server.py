@@ -356,6 +356,40 @@ class OrderTaxLine(BaseModel):
     amount: float
 
 
+# Cart Drafts (saved unfinished invoices)
+class DraftItem(BaseModel):
+    product_id: str
+    variant_id: Optional[str] = None
+    quantity: int
+
+
+class CartDraft(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    customer_id: Optional[str] = None
+    items: List[DraftItem] = []
+    notes: str = ""
+    created_by: str
+    created_by_name: str = ""
+    created_at: str = Field(default_factory=lambda: iso(now_utc()))
+    updated_at: str = Field(default_factory=lambda: iso(now_utc()))
+
+
+class CartDraftCreate(BaseModel):
+    name: str
+    customer_id: Optional[str] = None
+    items: List[DraftItem] = []
+    notes: str = ""
+
+
+class CartDraftUpdate(BaseModel):
+    name: Optional[str] = None
+    customer_id: Optional[str] = None
+    items: Optional[List[DraftItem]] = None
+    notes: Optional[str] = None
+
+
 class CustomerPrice(BaseModel):
     product_id: str
     price: float
@@ -1825,6 +1859,64 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
 
 
 # -----------------------------------------------------------------------------
+# Cart Drafts (saved unfinished invoices, scoped per user)
+# -----------------------------------------------------------------------------
+@api_router.get("/cart-drafts", response_model=List[CartDraft])
+async def list_cart_drafts(current: dict = Depends(get_current_user)):
+    cursor = db.cart_drafts.find({"created_by": current["id"]}, {"_id": 0}).sort("updated_at", -1)
+    return await cursor.to_list(200)
+
+
+@api_router.post("/cart-drafts", response_model=CartDraft)
+async def create_cart_draft(body: CartDraftCreate, current: dict = Depends(get_current_user)):
+    name = (body.name or "").strip() or f"Draft {iso(now_utc())[:16]}"
+    draft = CartDraft(
+        name=name,
+        customer_id=body.customer_id,
+        items=body.items,
+        notes=body.notes,
+        created_by=current["id"],
+        created_by_name=current.get("name", ""),
+    )
+    await db.cart_drafts.insert_one(draft.model_dump())
+    return draft
+
+
+@api_router.get("/cart-drafts/{draft_id}", response_model=CartDraft)
+async def get_cart_draft(draft_id: str, current: dict = Depends(get_current_user)):
+    d = await db.cart_drafts.find_one({"id": draft_id, "created_by": current["id"]}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return d
+
+
+@api_router.patch("/cart-drafts/{draft_id}", response_model=CartDraft)
+async def update_cart_draft(draft_id: str, body: CartDraftUpdate, current: dict = Depends(get_current_user)):
+    update = body.model_dump(exclude_unset=True)
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    if "items" in update:
+        update["items"] = [i if isinstance(i, dict) else i.model_dump() for i in update["items"]]
+    update["updated_at"] = iso(now_utc())
+    res = await db.cart_drafts.find_one_and_update(
+        {"id": draft_id, "created_by": current["id"]},
+        {"$set": update},
+        return_document=True, projection={"_id": 0},
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return res
+
+
+@api_router.delete("/cart-drafts/{draft_id}")
+async def delete_cart_draft(draft_id: str, current: dict = Depends(get_current_user)):
+    res = await db.cart_drafts.delete_one({"id": draft_id, "created_by": current["id"]})
+    if not res.deleted_count:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return {"ok": True}
+
+
+# -----------------------------------------------------------------------------
 # Health / root
 # -----------------------------------------------------------------------------
 @api_router.get("/")
@@ -1846,6 +1938,8 @@ async def on_startup():
     await db.payments.create_index("order_id")
     await db.order_audit.create_index("order_id")
     await db.tax_jurisdictions.create_index("name")
+    await db.cart_drafts.create_index("created_by")
+    await db.cart_drafts.create_index("updated_at")
 
     # Backfill: ensure credit_balance + deleted_at fields exist
     await db.customers.update_many({"credit_balance": {"$exists": False}}, {"$set": {"credit_balance": 0.0}})

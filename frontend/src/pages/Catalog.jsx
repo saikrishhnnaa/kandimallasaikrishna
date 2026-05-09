@@ -11,9 +11,13 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
 } from "../components/ui/sheet";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
+} from "../components/ui/dialog";
 import { toast } from "sonner";
 import {
   Search, ShoppingCart, Plus, Minus, X, SlidersHorizontal, Package, ImageIcon, Trash2,
+  Save, FolderOpen,
 } from "lucide-react";
 
 const SORTS = [
@@ -73,6 +77,15 @@ export default function Catalog() {
   const [preview, setPreview] = useState(null);
   const type = "invoice";
 
+  // Drafts
+  const [drafts, setDrafts] = useState([]);
+  const [saveDraftOpen, setSaveDraftOpen] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [loadDraftOpen, setLoadDraftOpen] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState(null);
+
+  const loadDrafts = () => api.get("/cart-drafts").then((r) => setDrafts(r.data)).catch(() => {});
+
   // Persist cart and customer to localStorage whenever they change
   useEffect(() => {
     if (!hydrated) { setHydrated(true); return; }
@@ -86,6 +99,7 @@ export default function Catalog() {
     api.get("/products").then((r) => setProducts(r.data));
     api.get("/customers").then((r) => setCustomers(r.data));
     api.get("/tax-jurisdictions").then((r) => setJurisdictions(r.data)).catch(() => {});
+    loadDrafts();
   }, []);
 
   const categories = useMemo(() => {
@@ -179,6 +193,7 @@ export default function Catalog() {
       toast.success(`${data.number} created`);
       setCart([]);
       setCustomerId("");
+      setActiveDraftId(null);
       try {
         localStorage.removeItem(cartStorageKey);
         localStorage.removeItem(`${cartStorageKey}_customer`);
@@ -187,6 +202,51 @@ export default function Catalog() {
       if (isAgent) nav("/agent/sales");
       else nav(`/admin/orders/${data.id}`);
     } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const openSaveDraft = () => {
+    if (!cart.length) { toast.error("Cart is empty"); return; }
+    // If we're editing an existing draft, prefill its name; else suggest one
+    const existing = drafts.find((d) => d.id === activeDraftId);
+    setDraftName(existing?.name || `Draft · ${new Date().toLocaleString()}`);
+    setSaveDraftOpen(true);
+  };
+
+  const saveDraft = async () => {
+    const name = (draftName || "").trim();
+    if (!name) { toast.error("Name your draft"); return; }
+    const payload = {
+      name,
+      customer_id: customerId || null,
+      items: cart.map((c) => ({ product_id: c.product_id, variant_id: c.variant_id || null, quantity: Number(c.quantity) })),
+      notes: "",
+    };
+    try {
+      if (activeDraftId) {
+        await api.patch(`/cart-drafts/${activeDraftId}`, payload);
+        toast.success("Draft updated");
+      } else {
+        const { data } = await api.post("/cart-drafts", payload);
+        setActiveDraftId(data.id);
+        toast.success("Draft saved");
+      }
+      setSaveDraftOpen(false);
+      loadDrafts();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const loadDraft = (d) => {
+    setCart((d.items || []).map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) })));
+    setCustomerId(d.customer_id || "");
+    setActiveDraftId(d.id);
+    setLoadDraftOpen(false);
+    toast.success(`Loaded "${d.name}"`);
+  };
+
+  const deleteDraft = async (id) => {
+    if (!window.confirm("Delete this draft?")) return;
+    try { await api.delete(`/cart-drafts/${id}`); toast.success("Draft deleted"); loadDrafts(); if (activeDraftId === id) setActiveDraftId(null); }
+    catch (e) { toast.error(formatApiError(e)); }
   };
 
   const customer = customers.find((c) => c.id === customerId);
@@ -203,6 +263,14 @@ export default function Catalog() {
         <div className="flex items-center gap-2 ml-auto">
           <Button variant="outline" onClick={() => setFiltersOpen((v) => !v)} data-testid="catalog-filters-toggle" className="h-10">
             <SlidersHorizontal size={14} className="mr-1.5"/>Filters
+          </Button>
+          <Button variant="outline" onClick={() => { loadDrafts(); setLoadDraftOpen(true); }} className="h-10 relative" data-testid="catalog-drafts-button">
+            <FolderOpen size={14} className="mr-1.5"/>Drafts
+            {drafts.length > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center min-w-[1.2rem] h-5 text-[10px] px-1 rounded-full bg-black/[0.06] text-[var(--text-muted)] font-mono">
+                {drafts.length}
+              </span>
+            )}
           </Button>
           <Sheet open={cartOpen} onOpenChange={setCartOpen}>
             <SheetTrigger asChild>
@@ -289,6 +357,9 @@ export default function Catalog() {
                   </Button>
                   <Button onClick={() => checkout(true)} variant="outline" className="w-full h-10" data-testid="catalog-checkout-edit-button">
                     Edit in form first
+                  </Button>
+                  <Button onClick={openSaveDraft} variant="outline" className="w-full h-10" data-testid="catalog-save-draft-button">
+                    <Save size={14} className="mr-1.5"/>{activeDraftId ? "Update draft" : "Save as draft"}
                   </Button>
                   <button
                     type="button"
@@ -433,6 +504,78 @@ export default function Catalog() {
           })}
         </div>
       )}
+
+      {/* Save draft dialog */}
+      <Dialog open={saveDraftOpen} onOpenChange={setSaveDraftOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="font-display tracking-tight">
+              {activeDraftId ? "Update draft" : "Save as draft"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div>
+              <Label className="overline">Name</Label>
+              <Input
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                placeholder="e.g. Mr Khan tentative order"
+                className="mt-2"
+                data-testid="draft-name-input"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter") saveDraft(); }}
+              />
+              <p className="text-[10px] text-[var(--text-muted)] mt-1.5">
+                {cart.length} item{cart.length !== 1 ? "s" : ""} · {customer ? (customer.company || customer.name) : "no customer"}
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setSaveDraftOpen(false)}>Cancel</Button>
+            <Button onClick={saveDraft} className="bg-[var(--primary)] hover:bg-[var(--primary-hover)]" data-testid="save-draft-confirm-button">
+              {activeDraftId ? "Update" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Load draft dialog */}
+      <Dialog open={loadDraftOpen} onOpenChange={setLoadDraftOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-display tracking-tight">Saved drafts</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 mt-2 max-h-[60vh] overflow-y-auto">
+            {drafts.length === 0 && (
+              <p className="text-sm text-[var(--text-muted)] py-8 text-center">
+                No drafts yet. Save your current cart as a draft to come back to it later.
+              </p>
+            )}
+            {drafts.map((d) => {
+              const cust = customers.find((c) => c.id === d.customer_id);
+              const totalItems = (d.items || []).reduce((s, i) => s + Number(i.quantity || 0), 0);
+              return (
+                <div key={d.id} className="border border-[var(--border)] rounded-md p-3 flex items-center gap-3" data-testid={`draft-row-${d.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{d.name}</div>
+                    <div className="text-xs text-[var(--text-muted)] mt-0.5">
+                      {totalItems} item{totalItems !== 1 ? "s" : ""}
+                      {cust ? <> · {cust.company || cust.name}</> : <> · no customer</>}
+                      <span className="ml-2 font-mono">{new Date(d.updated_at).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <Button size="sm" onClick={() => loadDraft(d)} className="bg-[var(--primary)] hover:bg-[var(--primary-hover)]" data-testid={`load-draft-${d.id}`}>
+                    Load
+                  </Button>
+                  <Button size="icon" variant="ghost" onClick={() => deleteDraft(d.id)} data-testid={`delete-draft-${d.id}`}>
+                    <Trash2 size={14}/>
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
