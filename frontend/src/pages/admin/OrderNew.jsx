@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { useNavigate, useParams, useSearchParams, Link } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, formatApiError, formatCurrency } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -10,7 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../../components/ui/select";
 import { toast } from "sonner";
-import { Plus, Trash2, ChevronLeft, ScanLine, Repeat, Wallet, ShoppingBag } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, ScanLine, Repeat, Wallet, ShoppingBag, ShoppingCart, ArrowRight, Image as ImageIcon, ChevronDown, ChevronUp } from "lucide-react";
 import BarcodeScanner from "../../components/BarcodeScanner";
 import { useUsbScanner } from "../../hooks/useUsbScanner";
 import { useAuth } from "../../contexts/AuthContext";
@@ -200,245 +200,345 @@ export default function OrderForm() {
   };
 
   const availableCredit = preview?.available_credit ?? customer?.credit_balance ?? 0;
+  const totalQty = (preview?.items || []).reduce((s, p) => s + Number(p.quantity || 0), 0);
+  const lineCount = (preview?.items || []).length;
+  const [headerOpen, setHeaderOpen] = useState(!isEdit);
+  const [tradeOpen, setTradeOpen] = useState(false);
+
+  const tierForLine = (it, prod) => {
+    const override = it.unit_price_override;
+    if (override === "" || override === null || override === undefined) return "Auto";
+    const v = Number(override);
+    if (!prod) return "Custom";
+    if (prod.msrp != null && Math.abs(v - Number(prod.msrp)) < 0.001) return "MSRP";
+    if (prod.distribution_price != null && Math.abs(v - Number(prod.distribution_price)) < 0.001) return "Distribution";
+    if (prod.wholesale_price != null && Math.abs(v - Number(prod.wholesale_price)) < 0.001) return "Wholesale";
+    if (Math.abs(v - Number(prod.base_price || 0)) < 0.001) return "Retail";
+    return "Custom";
+  };
 
   return (
-    <div className="p-8 max-w-[1200px] mx-auto" data-testid="order-form-page">
+    <div className="p-6 lg:p-8 max-w-[1400px] mx-auto" data-testid="order-form-page">
       <button onClick={() => nav(-1)} className="overline flex items-center gap-1 mb-3 hover:text-[var(--primary)]">
         <ChevronLeft size={14}/>Back
       </button>
-      <div className="flex items-center justify-between gap-4 mb-1">
-        <h1 className="font-display text-4xl tracking-tighter">
-          {isEdit ? `Edit ${originalOrder?.number || "…"}` : "New Invoice"}
-        </h1>
-        {isEdit && (
-          <Link
-            to={isAgent ? "/agent/catalog" : "/admin/catalog"}
-            className="inline-flex items-center text-sm h-10 px-3 rounded-md border border-[var(--border)] hover:bg-black/5"
-            data-testid="goto-catalog-link"
-          >
-            <ShoppingBag size={14} className="mr-1.5"/>Browse catalog
-          </Link>
-        )}
-      </div>
-      <p className="text-sm text-[var(--text-muted)] mt-1 mb-6">
-        {isEdit ? "Edits adjust stock and customer credit automatically." : "Auto-applied pricing, taxes, and trade-ins."}
-      </p>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="surface-card p-6">
-            <p className="overline mb-4">Header</p>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label className="overline">Customer</Label>
-                <Select value={customerId} onValueChange={setCustomerId} disabled={isEdit}>
-                  <SelectTrigger className="mt-2" data-testid="order-customer-select"><SelectValue placeholder="Choose customer"/></SelectTrigger>
-                  <SelectContent>
-                    {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.company || c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                {customer && (
-                  <div className="text-xs text-[var(--text-muted)] mt-2 font-mono">
-                    Net-{customer.payment_terms_days} · Credit avail: {formatCurrency(customer.credit_balance || 0)}
-                  </div>
-                )}
+      {/* HERO: shopping-cart-style heading + big Total CTA */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 items-end mb-6">
+        <div>
+          <p className="overline">{isEdit ? `Edit ${originalOrder?.number || "…"}` : "New invoice"}</p>
+          <h1 className="font-display text-4xl lg:text-5xl tracking-tighter mt-1 flex items-center gap-3">
+            <ShoppingCart size={36} className="text-[var(--primary)]" strokeWidth={1.5}/>
+            Your shopping cart
+          </h1>
+          <p className="text-sm text-[var(--text-muted)] mt-1">
+            Edit your items, add trade-ins, or save changes — stock and credit update automatically.
+          </p>
+        </div>
+
+        <button
+          onClick={submit}
+          disabled={!preview}
+          data-testid="submit-order-button"
+          className="group relative overflow-hidden rounded-xl px-6 lg:px-8 py-5 bg-[var(--text)] hover:bg-black text-white text-left disabled:opacity-50 disabled:cursor-not-allowed min-w-[280px]"
+        >
+          <div className="overline text-white/60 mb-1">Total</div>
+          <div className="flex items-center justify-between gap-6">
+            <span className="font-display text-3xl lg:text-4xl tracking-tighter">{formatCurrency(preview?.total || 0)}</span>
+            <ArrowRight size={28} className="transition-transform group-hover:translate-x-1"/>
+          </div>
+          <div className="overline mt-2 text-white/60">{isEdit ? "Save changes" : "Create invoice"}</div>
+        </button>
+      </div>
+
+      {/* HEADER: customer + tax (collapsible on edit) */}
+      <div className="surface-card mb-4">
+        <button
+          onClick={() => setHeaderOpen((v) => !v)}
+          className="w-full px-6 py-4 flex items-center justify-between hover:bg-black/[0.015]"
+          data-testid="order-header-toggle"
+        >
+          <div className="flex items-center gap-4 text-left">
+            <div>
+              <div className="overline">Customer</div>
+              <div className="text-sm font-medium">{customer ? (customer.company || customer.name) : <span className="text-[var(--text-muted)]">Choose customer…</span>}</div>
+            </div>
+            {customer && (
+              <div className="hidden md:block text-xs text-[var(--text-muted)] border-l border-[var(--border)] pl-4 font-mono">
+                Net-{customer.payment_terms_days} · Credit {formatCurrency(customer.credit_balance || 0)}
               </div>
-              <div className="col-span-2">
-                <Label className="overline">Tax jurisdiction</Label>
-                <Select
-                  value={taxJurisdictionId === undefined ? "__default__" : (taxJurisdictionId === "" ? "__none__" : taxJurisdictionId)}
-                  onValueChange={(v) => {
-                    if (v === "__default__") setTaxJurisdictionId(undefined);
-                    else if (v === "__none__") setTaxJurisdictionId("");
-                    else setTaxJurisdictionId(v);
-                  }}
-                >
-                  <SelectTrigger className="mt-2" data-testid="order-tax-select"><SelectValue/></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">Use customer default ({customer?.default_tax_jurisdiction_id ? (jurisdictions.find((j) => j.id === customer.default_tax_jurisdiction_id)?.name || "—") : "no tax"})</SelectItem>
-                    <SelectItem value="__none__">No tax (override)</SelectItem>
-                    {jurisdictions.filter((j) => j.active).map((j) => (
-                      <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            )}
+            {(preview?.tax_jurisdiction_name) && (
+              <div className="hidden md:block text-xs text-[var(--text-muted)] border-l border-[var(--border)] pl-4">
+                Tax: {preview.tax_jurisdiction_name}
               </div>
+            )}
+          </div>
+          {headerOpen ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+        </button>
+        {headerOpen && (
+          <div className="px-6 pb-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <Label className="overline">Customer</Label>
+              <Select value={customerId} onValueChange={setCustomerId} disabled={isEdit}>
+                <SelectTrigger className="mt-2" data-testid="order-customer-select"><SelectValue placeholder="Choose customer"/></SelectTrigger>
+                <SelectContent>
+                  {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.company || c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="overline">Tax jurisdiction</Label>
+              <Select
+                value={taxJurisdictionId === undefined ? "__default__" : (taxJurisdictionId === "" ? "__none__" : taxJurisdictionId)}
+                onValueChange={(v) => {
+                  if (v === "__default__") setTaxJurisdictionId(undefined);
+                  else if (v === "__none__") setTaxJurisdictionId("");
+                  else setTaxJurisdictionId(v);
+                }}
+              >
+                <SelectTrigger className="mt-2" data-testid="order-tax-select"><SelectValue/></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">Use customer default ({customer?.default_tax_jurisdiction_id ? (jurisdictions.find((j) => j.id === customer.default_tax_jurisdiction_id)?.name || "—") : "no tax"})</SelectItem>
+                  <SelectItem value="__none__">No tax (override)</SelectItem>
+                  {jurisdictions.filter((j) => j.active).map((j) => (
+                    <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
+        )}
+      </div>
 
-          <div className="surface-card p-6">
-            <div className="flex items-center justify-between mb-4">
-              <p className="overline">Line items</p>
-              <div className="flex items-center gap-2">
-                {isEdit && (
-                  <Button
-                    variant="outline" size="sm"
-                    onClick={() => {
-                      try {
-                        sessionStorage.setItem("pos_addTo_invoice", id);
-                        sessionStorage.setItem("pos_addTo_invoice_number", originalOrder?.number || "");
-                        sessionStorage.setItem("pos_addTo_invoice_role", isAgent ? "agent" : "admin");
-                      } catch (_) { /* ignore */ }
-                      const path = isAgent ? "/agent/catalog" : "/admin/catalog";
-                      nav(`${path}?addTo=${id}`);
-                    }}
-                    data-testid="order-add-from-catalog-button"
-                    className="border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--accent-soft)]"
-                  >
-                    <ShoppingBag size={14} className="mr-1"/>+ Add from catalog
-                  </Button>
-                )}
-                <Button variant="outline" size="sm" onClick={() => setScanOpen(true)} data-testid="order-scan-button"><ScanLine size={14} className="mr-1"/>Scan</Button>
-                <Button variant="ghost" size="sm" onClick={addLine} data-testid="add-line-button"><Plus size={14} className="mr-1"/>Add line</Button>
-              </div>
+      {/* TRADE-IN STRIP */}
+      <div className="surface-card mb-4">
+        <button
+          onClick={() => setTradeOpen((v) => !v)}
+          className="w-full px-6 py-3 flex items-center justify-between hover:bg-black/[0.015]"
+          data-testid="trade-ins-toggle"
+        >
+          <div className="flex items-center gap-2">
+            <Repeat size={14} className="text-[var(--primary)]"/>
+            <span className="font-medium">+ Trade-In</span>
+            {tradeIns.length > 0 && (
+              <span className="ml-2 text-xs font-mono px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--primary)]">
+                {tradeIns.length} · −{formatCurrency(preview?.trade_in_total || 0)}
+              </span>
+            )}
+          </div>
+          {tradeOpen ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+        </button>
+        {tradeOpen && (
+          <div className="px-6 pb-5 space-y-3">
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" onClick={addTradeIn} data-testid="add-tradein-button"><Plus size={14} className="mr-1"/>Add trade-in</Button>
             </div>
-            <div className="space-y-2">
-              {items.length > 0 && (
-                <div className="grid grid-cols-12 gap-2 px-1">
-                  <div className="col-span-5 overline text-[10px]">Product</div>
-                  <div className="col-span-2 overline text-[10px]">Qty</div>
-                  <div className="col-span-3 overline text-[10px]">Unit price <span className="lowercase text-[var(--text-muted)] ml-1 normal-case">override · auto if blank</span></div>
-                  <div className="col-span-1 overline text-[10px] text-right">Line</div>
-                  <div className="col-span-1"></div>
+            {tradeIns.map((ti, idx) => (
+              <div key={idx} className="border border-[var(--border)] rounded-md p-3 space-y-2">
+                <div className="grid grid-cols-12 gap-2">
+                  <Input className="col-span-6" placeholder="Description (e.g. Old returnable boxes)" value={ti.description}
+                    onChange={(e) => updateTradeIn(idx, { description: e.target.value })} data-testid={`tradein-desc-${idx}`}/>
+                  <Input className="col-span-2" type="number" min="1" placeholder="Qty" value={ti.quantity}
+                    onChange={(e) => updateTradeIn(idx, { quantity: e.target.value })}/>
+                  <Input className="col-span-3" type="number" step="0.01" placeholder="Unit value" value={ti.unit_value}
+                    onChange={(e) => updateTradeIn(idx, { unit_value: e.target.value })} data-testid={`tradein-value-${idx}`}/>
+                  <div className="col-span-1 flex justify-end">
+                    <Button variant="ghost" size="icon" onClick={() => removeTradeIn(idx)}><Trash2 size={14}/></Button>
+                  </div>
                 </div>
-              )}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <Switch checked={!!ti.restock} onCheckedChange={(v) => updateTradeIn(idx, { restock: v })} data-testid={`tradein-restock-${idx}`}/>
+                    <span className="text-xs">Restock to inventory</span>
+                  </div>
+                  {ti.restock && (
+                    <Select value={ti.product_id || ""} onValueChange={(v) => updateTradeIn(idx, { product_id: v })}>
+                      <SelectTrigger className="w-64 h-9"><SelectValue placeholder="Map to product"/></SelectTrigger>
+                      <SelectContent>
+                        {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </div>
+            ))}
+            {!tradeIns.length && <div className="text-xs text-[var(--text-muted)] italic">No trade-ins on this order.</div>}
+          </div>
+        )}
+      </div>
+
+      {/* LINE ITEMS TABLE */}
+      <div className="surface-card overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
+          <p className="overline">Line items</p>
+          <div className="flex items-center gap-2">
+            {isEdit && (
+              <Button
+                variant="outline" size="sm"
+                onClick={() => {
+                  try {
+                    sessionStorage.setItem("pos_addTo_invoice", id);
+                    sessionStorage.setItem("pos_addTo_invoice_number", originalOrder?.number || "");
+                    sessionStorage.setItem("pos_addTo_invoice_role", isAgent ? "agent" : "admin");
+                  } catch (_) { /* ignore */ }
+                  const path = isAgent ? "/agent/catalog" : "/admin/catalog";
+                  nav(`${path}?addTo=${id}`);
+                }}
+                data-testid="order-add-from-catalog-button"
+                className="border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--accent-soft)]"
+              >
+                <ShoppingBag size={14} className="mr-1"/>+ Add from catalog
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => setScanOpen(true)} data-testid="order-scan-button"><ScanLine size={14} className="mr-1"/>Scan</Button>
+            <Button variant="ghost" size="sm" onClick={addLine} data-testid="add-line-button"><Plus size={14} className="mr-1"/>Add line</Button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-black/[0.02]">
+              <tr className="text-left border-b border-[var(--border)]">
+                <th className="w-14"></th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)]">Category</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] min-w-[260px]">Line item</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)]">Pricing</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-20">Qty</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-32">Unit price</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-28 text-right">Suggested</th>
+                <th className="px-3 py-3 overline text-[10px] font-medium text-[var(--text-muted)] w-28 text-right">Ext. price</th>
+                <th className="w-10"></th>
+              </tr>
+            </thead>
+            <tbody>
               {items.map((it, idx) => {
                 const prod = products.find((p) => p.id === it.product_id);
                 const hasVariants = prod?.variants?.length > 0;
                 const lineFromPreview = preview?.items?.find(
                   (p) => p.product_id === it.product_id && (p.variant_id || null) === (it.variant_id || null)
                 );
+                const img = (prod?.images || []).find((i) => i.is_primary)?.data_url || (prod?.images || [])[0]?.data_url;
+                const tier = tierForLine(it, prod);
+                const tierColor = {
+                  MSRP: "bg-[var(--success)]/10 text-[var(--success)]",
+                  Distribution: "bg-blue-100 text-blue-800",
+                  Wholesale: "bg-[var(--primary-soft)] text-[var(--primary)]",
+                  Auto: "bg-black/[0.04] text-[var(--text-muted)]",
+                  Custom: "bg-[var(--warning)]/10 text-[var(--warning)]",
+                  Retail: "bg-black/[0.04] text-[var(--text)]",
+                }[tier] || "bg-black/[0.04]";
+
                 return (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                    <div className={hasVariants ? "col-span-3" : "col-span-5"}>
+                  <tr key={idx} className="border-b border-[var(--border)] last:border-0 hover:bg-black/[0.01] align-top" data-testid={`order-line-${idx}`}>
+                    <td className="px-3 py-3">
+                      <div className="w-10 h-10 rounded-md bg-black/[0.04] border border-[var(--border)] overflow-hidden flex items-center justify-center">
+                        {img ? <img src={img} alt="" className="w-full h-full object-cover"/> : <ImageIcon size={14} className="text-[var(--text-muted)]"/>}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-xs text-[var(--text-muted)] truncate max-w-[140px]">{prod?.category || "—"}</td>
+                    <td className="px-3 py-3">
                       <Select value={it.product_id} onValueChange={(v) => updateLine(idx, { product_id: v, variant_id: null })}>
-                        <SelectTrigger data-testid={`line-product-${idx}`}><SelectValue placeholder="Choose product"/></SelectTrigger>
+                        <SelectTrigger data-testid={`line-product-${idx}`} className="h-9"><SelectValue placeholder="Choose product"/></SelectTrigger>
                         <SelectContent>
                           {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
-                    </div>
-                    {hasVariants && (
-                      <div className="col-span-2">
+                      {hasVariants && (
                         <Select value={it.variant_id || ""} onValueChange={(v) => updateLine(idx, { variant_id: v })}>
-                          <SelectTrigger data-testid={`line-variant-${idx}`}><SelectValue placeholder="Variant"/></SelectTrigger>
+                          <SelectTrigger data-testid={`line-variant-${idx}`} className="h-8 mt-1.5 text-xs"><SelectValue placeholder="Choose variant"/></SelectTrigger>
                           <SelectContent>
                             {prod.variants.map((v) => (
-                              <SelectItem key={v.id} value={v.id}>
-                                {v.label} <span className="text-xs text-[var(--text-muted)] ml-1">· {v.stock} left</span>
-                              </SelectItem>
+                              <SelectItem key={v.id} value={v.id}>{v.label} <span className="text-xs text-[var(--text-muted)] ml-1">· {v.stock} left</span></SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
-                      </div>
-                    )}
-                    <div className="col-span-2">
-                      <Input type="number" min="1" placeholder="Qty" value={it.quantity}
-                        onChange={(e) => updateLine(idx, { quantity: e.target.value })}
-                        className="font-mono"
-                        data-testid={`line-qty-${idx}`}/>
-                    </div>
-                    <div className="col-span-3">
-                      <Input
-                        type="number" min="0" step="0.01"
-                        placeholder={lineFromPreview ? formatCurrency(lineFromPreview.unit_price).replace(/[^0-9.]/g, "") : "auto"}
-                        value={it.unit_price_override ?? ""}
-                        onChange={(e) => updateLine(idx, { unit_price_override: e.target.value })}
-                        className="font-mono"
-                        data-testid={`line-price-${idx}`}
-                      />
-                      {prod && (prod.msrp || prod.distribution_price || prod.wholesale_price) && (
-                        <div className="flex flex-wrap gap-1 mt-1">
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      <span className={`text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded ${tierColor}`} data-testid={`line-tier-${idx}`}>
+                        {tier}
+                      </span>
+                      {prod && (prod.msrp != null || prod.distribution_price != null || prod.wholesale_price != null) && (
+                        <div className="flex flex-wrap gap-1 mt-2">
                           {prod.msrp != null && (
                             <button type="button"
                               onClick={() => updateLine(idx, { unit_price_override: prod.msrp })}
                               data-testid={`line-pricetier-msrp-${idx}`}
-                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/[0.04] hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]"
-                              title="Apply MSRP">
-                              MSRP <span className="ml-0.5">{formatCurrency(prod.msrp)}</span>
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]">
+                              MSRP {formatCurrency(prod.msrp)}
                             </button>
                           )}
                           {prod.distribution_price != null && (
                             <button type="button"
                               onClick={() => updateLine(idx, { unit_price_override: prod.distribution_price })}
                               data-testid={`line-pricetier-dist-${idx}`}
-                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/[0.04] hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]"
-                              title="Apply Distribution price">
-                              Dist <span className="ml-0.5">{formatCurrency(prod.distribution_price)}</span>
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]">
+                              Dist {formatCurrency(prod.distribution_price)}
                             </button>
                           )}
                           {prod.wholesale_price != null && (
                             <button type="button"
                               onClick={() => updateLine(idx, { unit_price_override: prod.wholesale_price })}
                               data-testid={`line-pricetier-wholesale-${idx}`}
-                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/[0.04] hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]"
-                              title="Apply Wholesale price">
-                              W'sale <span className="ml-0.5">{formatCurrency(prod.wholesale_price)}</span>
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded hover:bg-[var(--accent-soft)] hover:text-[var(--primary)] border border-[var(--border)]">
+                              W'sale {formatCurrency(prod.wholesale_price)}
                             </button>
                           )}
                         </div>
                       )}
-                    </div>
-                    <div className="col-span-1 text-right text-xs font-mono text-[var(--text-muted)]">
+                    </td>
+                    <td className="px-3 py-3">
+                      <Input type="number" min="1" value={it.quantity}
+                        onChange={(e) => updateLine(idx, { quantity: e.target.value })}
+                        className="h-9 font-mono text-center"
+                        data-testid={`line-qty-${idx}`}/>
+                    </td>
+                    <td className="px-3 py-3">
+                      <Input type="number" min="0" step="0.01"
+                        placeholder={lineFromPreview ? formatCurrency(lineFromPreview.unit_price).replace(/[^0-9.]/g, "") : "auto"}
+                        value={it.unit_price_override ?? ""}
+                        onChange={(e) => updateLine(idx, { unit_price_override: e.target.value })}
+                        className="h-9 font-mono"
+                        data-testid={`line-price-${idx}`}/>
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-xs text-[var(--text-muted)]">
+                      {prod?.msrp != null ? formatCurrency(prod.msrp) : "—"}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono">
                       {lineFromPreview ? formatCurrency(lineFromPreview.line_total) : "—"}
-                    </div>
-                    <div className="col-span-1 flex justify-end">
-                      <Button variant="ghost" size="icon" onClick={() => removeLine(idx)}><Trash2 size={14}/></Button>
-                    </div>
-                  </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <Button variant="ghost" size="icon" onClick={() => removeLine(idx)} data-testid={`line-remove-${idx}`}><Trash2 size={14}/></Button>
+                    </td>
+                  </tr>
                 );
               })}
-              {!items.length && <div className="text-center py-8 text-sm text-[var(--text-muted)]">No lines yet. Click "Add line".</div>}
-            </div>
-          </div>
+              {!items.length && (
+                <tr><td colSpan={9} className="px-6 py-12 text-center text-sm text-[var(--text-muted)]">No lines yet. Click "+ Add from catalog" to start.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
 
-          {/* Trade-ins */}
-          <div className="surface-card p-6" data-testid="trade-ins-section">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Repeat size={14} className="text-[var(--primary)]"/>
-                <p className="overline">Trade-in</p>
-              </div>
-              <Button variant="ghost" size="sm" onClick={addTradeIn} data-testid="add-tradein-button"><Plus size={14} className="mr-1"/>Add trade-in</Button>
-            </div>
-            <p className="text-xs text-[var(--text-muted)] mb-3">Items the customer is trading in. Their value is deducted from this order's total.</p>
-            <div className="space-y-3">
-              {tradeIns.map((ti, idx) => (
-                <div key={idx} className="border border-[var(--border)] rounded-md p-3 space-y-2">
-                  <div className="grid grid-cols-12 gap-2">
-                    <Input className="col-span-6" placeholder="Description (e.g. Old returnable boxes)" value={ti.description}
-                      onChange={(e) => updateTradeIn(idx, { description: e.target.value })} data-testid={`tradein-desc-${idx}`}/>
-                    <Input className="col-span-2" type="number" min="1" placeholder="Qty" value={ti.quantity}
-                      onChange={(e) => updateTradeIn(idx, { quantity: e.target.value })}/>
-                    <Input className="col-span-3" type="number" step="0.01" placeholder="Unit value" value={ti.unit_value}
-                      onChange={(e) => updateTradeIn(idx, { unit_value: e.target.value })} data-testid={`tradein-value-${idx}`}/>
-                    <div className="col-span-1 flex justify-end">
-                      <Button variant="ghost" size="icon" onClick={() => removeTradeIn(idx)}><Trash2 size={14}/></Button>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <Switch checked={!!ti.restock} onCheckedChange={(v) => updateTradeIn(idx, { restock: v })} data-testid={`tradein-restock-${idx}`}/>
-                      <span className="text-xs">Restock to inventory</span>
-                    </div>
-                    {ti.restock && (
-                      <Select value={ti.product_id || ""} onValueChange={(v) => updateTradeIn(idx, { product_id: v })}>
-                        <SelectTrigger className="w-64 h-9"><SelectValue placeholder="Map to product"/></SelectTrigger>
-                        <SelectContent>
-                          {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {!tradeIns.length && <div className="text-xs text-[var(--text-muted)] italic">No trade-ins on this order.</div>}
-            </div>
+        {/* Footer summary */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-[var(--border)] bg-black/[0.015]">
+          <div className="flex items-center gap-6 text-xs font-mono text-[var(--text-muted)]">
+            <span>Total quantity: <span className="text-[var(--text)] font-medium">{totalQty}</span></span>
+            <span>Line items: <span className="text-[var(--text)] font-medium">{lineCount}</span></span>
           </div>
+          <div className="text-right">
+            <div className="overline text-[10px] text-[var(--text-muted)]">Subtotal</div>
+            <div className="font-display text-2xl tracking-tight">{formatCurrency(preview?.subtotal || 0)}</div>
+          </div>
+        </div>
+      </div>
 
-          {/* Customer credit */}
+      {/* Customer credit + summary breakdown + notes */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+        <div className="lg:col-span-2 space-y-4">
           {customer && availableCredit > 0 && (
-            <div className="surface-card p-6" data-testid="credit-section">
+            <div className="surface-card p-5" data-testid="credit-section">
               <div className="flex items-center gap-2 mb-3">
                 <Wallet size={14} className="text-[var(--primary)]"/>
                 <p className="overline">Apply customer credit</p>
@@ -454,29 +554,15 @@ export default function OrderForm() {
               </div>
             </div>
           )}
-
-          <div className="surface-card p-6">
+          <div className="surface-card p-5">
             <Label className="overline">Notes</Label>
             <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-2"/>
           </div>
         </div>
 
-        {/* Summary */}
-        <aside className="surface-card p-6 h-fit sticky top-4">
-          <p className="overline mb-4">Summary</p>
-          <div className="space-y-2">
-            {(preview?.items || []).map((p, i) => (
-              <div key={`${p.product_id}-${p.variant_id || "_"}-${i}`} className="flex justify-between text-sm gap-2">
-                <div className="min-w-0">
-                  <div className="font-medium truncate">{p.name}{p.variant_label ? ` · ${p.variant_label}` : ""}</div>
-                  <div className="text-xs text-[var(--text-muted)] font-mono">{p.quantity} × {formatCurrency(p.unit_price)}</div>
-                </div>
-                <div className="font-mono">{formatCurrency(p.line_total)}</div>
-              </div>
-            ))}
-            {!preview?.items?.length && <div className="text-sm text-[var(--text-muted)]">Choose customer and add lines.</div>}
-          </div>
-          <div className="border-t border-[var(--border)] mt-5 pt-4 space-y-1 text-sm">
+        <aside className="surface-card p-5">
+          <p className="overline mb-3">Summary</p>
+          <div className="space-y-1 text-sm">
             <Row label="Subtotal" value={formatCurrency(preview?.subtotal || 0)} />
             {(preview?.trade_in_total || 0) > 0 && (
               <Row label="Trade-in" value={`− ${formatCurrency(preview.trade_in_total)}`} accent />
@@ -492,11 +578,6 @@ export default function OrderForm() {
               <span>{formatCurrency(preview?.total || 0)}</span>
             </div>
           </div>
-          <Button onClick={submit} disabled={!preview}
-            className="w-full mt-5 h-11 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white"
-            data-testid="submit-order-button">
-            {isEdit ? "Save changes" : "Create invoice"}
-          </Button>
         </aside>
       </div>
 
