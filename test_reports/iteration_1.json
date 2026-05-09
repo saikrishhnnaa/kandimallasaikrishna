@@ -1,0 +1,56 @@
+{
+  "summary": "End-to-end testing of Product Variants feature: backend (variant CRUD, by-barcode lookup, order creation/edit/delete/restore stock reconciliation, OOS, regression) + frontend (admin Products variant editor, admin OrderNew variant select, barcode-scan→variant auto-add, agent mobile new-order). 13/14 backend tests pass. 1 backend bug found in PATCH /orders/{id} that does NOT decrement variant stock on edit. All admin-facing UI variant flows look correct visually and functionally.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PATCH /api/orders/{id}",
+        "issue": "When editing an order whose item has a variant_id, the new-item decrement loop omits variant_id, so it decrements parent product.stock instead of variants.$.stock. The OLD-item restock loop (and create_order/restore) correctly pass variant_id; only the edit decrement does not. Net effect: variant stock is OVER-restored on edit (only added back, never re-deducted). Reproduced via test_patch_qty_reconciles_variant_stock — expected variant stock = before-newQty, observed = before. RCA: server.py around line 1002 calls apply_stock_change(...) without variant_id. Fix: replace inline loop with `await _apply_decrements(new_items, order['number'], current)` to mirror create_order, OR pass variant_id=it.get('variant_id'). Same `reason='order_edited'` should be preserved.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/agent/new-order", "issues": ["Missing data-testid on agent-add-line button correctly named 'agent-add-line' (not 'agent-add-line-button'). Variant Select inside agent line item has no data-testid (admin equivalent is 'line-variant-{idx}'). Recommend adding 'agent-line-product-{idx}' and 'agent-line-variant-{idx}' for symmetry & testability."]}
+    ]
+  },
+  "verified_flows": [
+    "POST /api/products with variants[] persists labels/sku/barcode/price/stock; GET /api/products returns them.",
+    "GET /api/products/by-barcode/{code} returns {product, variant} for variant SKU/barcode and {product, variant: null} for parent SKU.",
+    "POST /api/orders without variant_id on a variant-product → 400 'has variants — choose one'.",
+    "POST /api/orders with variant_id → unit_price = variant.price, items[*].variant_label set, variant.stock decremented, parent.stock untouched.",
+    "Tier pricing (parent-level) overrides variant base price when qty meets min_qty (12 → $4.50 instead of variant $3.50).",
+    "Out-of-stock guard returns 400 with 'Name · Label (have X, need Y)'.",
+    "DELETE then restore correctly reverses variant stock.",
+    "Plain product (no variants) regression — order, list still works without variant_id.",
+    "FRONTEND admin: Products dialog shows variant grid (label/sku/barcode/price/stock + remove). Product list row shows 'from $X.XX' and 'N variants · M tiers' summary.",
+    "FRONTEND admin: /admin/orders/new shows second variant Select after product chosen with 'Label · N left' options. Submitting without variant shows toast 'Product has variants — choose one'. Summary and OrderDetail show 'Product · Variant'. Stock decremented on backend.",
+    "FRONTEND scan: BarcodeScanner manual entry of variant barcode auto-adds line with variant pre-selected and toast 'Added: Product · Variant'."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_variants.py",
+    "/app/test_reports/pytest/variants_results.xml"
+  ],
+  "action_items": [
+    "FIX backend PATCH /api/orders/{id}: pass variant_id when decrementing new items on edit (server.py ~line 1002). Recommended one-liner: replace inline loop with `await _apply_decrements(new_items, order['number'], current)` and consider also passing reason='order_edited' through _apply_decrements (or keep the loop but include `variant_id=it.get('variant_id')`).",
+    "(Minor) Add data-testid='agent-line-product-{idx}' and 'agent-line-variant-{idx}' on AgentNewOrder.jsx for parity with admin OrderNew.jsx and easier automation."
+  ],
+  "critical_code_review_comments": [
+    "server.py update_order inlines the decrement loop instead of reusing _apply_decrements helper, leading to the variant_id omission bug. DRY/consistency violation — the same pattern is correctly handled via helpers in create_order and the restore endpoint.",
+    "Variant pricing semantics intentional & correctly implemented: customer custom_price (parent-level) > tiered (parent-level, qty-based) > variant.price > product.base_price. Documented behaviour matches request spec.",
+    "Frontend Products.jsx uses crypto.randomUUID() to generate variant ids client-side — server still regenerates via Variant.id default factory on insert; both fine, but new ids are server-trusted only on create. On edit (variants list update), client-supplied ids are persisted as-is — recommend backend regenerate ids only when missing to avoid collision."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_variants.py (new)"
+  ],
+  "success_rate": {"backend": "93% (13/14)", "frontend": "100% admin flows verified; agent flow partial (functional in code, no data-testids to automate)"},
+  "test_credentials": "admin@wholesalepos.com/admin123 (used)",
+  "seed_data_creation": "Created TEST Premium Cola product with 2 variants (1 L @$3.50/100, 2 L @$6.50/50) and TEST Plain Item (no variants) and TEST VarCust customer. Several TEST orders left in DB — cleanup not strictly required (soft-deletable).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes the PATCH order variant_id bug at server.py ~line 1002, rerun: pytest /app/backend/tests/test_variants.py::TestVariantOrderPatch -v. Backend tests are idempotent and create their own TEST_ data each run.",
+  "rca of the issue": "PATCH /api/orders/{id} bug: line 1002 calls `apply_stock_change(it['product_id'], -qty, 'order_edited', order['number'], current)` without `variant_id=it.get('variant_id')`. Helper signature defaults variant_id=None which routes the $inc to product.stock instead of variants.$.stock. Reproduction: create order with variant qty=3, PATCH to qty=5; observed variant.stock back to original (only old restocked, new not decremented at variant level). Fix: add variant_id kw or call _apply_decrements(new_items, ...) which already passes it correctly."
+}
