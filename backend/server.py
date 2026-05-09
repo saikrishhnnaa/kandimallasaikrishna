@@ -859,7 +859,10 @@ async def import_products(file: UploadFile = File(...), _: dict = Depends(requir
         raise HTTPException(status_code=400, detail="Please upload a .csv file")
     raw = (await file.read()).decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames or "sku" not in [f.strip().lower() for f in reader.fieldnames]:
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV is empty")
+    csv_cols = {(c or "").strip().lower() for c in reader.fieldnames}
+    if "sku" not in csv_cols:
         raise HTTPException(status_code=400, detail="CSV must contain a 'sku' column")
 
     created = 0
@@ -871,36 +874,73 @@ async def import_products(file: UploadFile = File(...), _: dict = Depends(requir
             sku = row.get("sku") or ""
             if not sku:
                 raise ValueError("Missing SKU")
-            payload = {
-                "sku": sku,
-                "barcode": row.get("barcode", ""),
-                "name": row.get("name", "") or sku,
-                "description": row.get("description", ""),
-                "category": row.get("category", "") or "General",
-                "flavour": row.get("flavour", ""),
-                "unit": row.get("unit", "") or "pcs",
-                "units_per_box": int(float(row.get("units_per_box") or 1)),
-                "base_price": float(row.get("base_price") or 0),
-                "msrp": float(row.get("msrp")) if row.get("msrp") else None,
-                "distribution_price": float(row.get("distribution_price")) if row.get("distribution_price") else None,
-                "wholesale_price": float(row.get("wholesale_price")) if row.get("wholesale_price") else None,
-                "stock": int(float(row.get("stock") or 0)),
-                "low_stock_threshold": int(float(row.get("low_stock_threshold") or 10)),
-                "active": (row.get("active") or "1") not in ("0", "false", "False"),
-                "tiers": _decode_tiers(row.get("tiers", "")),
-                "variants": _decode_variants(row.get("variants", "")),
-            }
+
+            # Build partial payload: only include columns the CSV actually has
+            partial: dict = {"sku": sku}
+            if "barcode" in csv_cols:
+                partial["barcode"] = row.get("barcode", "")
+            if "name" in csv_cols:
+                partial["name"] = row.get("name", "") or sku
+            if "description" in csv_cols:
+                partial["description"] = row.get("description", "")
+            if "category" in csv_cols:
+                partial["category"] = row.get("category", "") or "General"
+            if "flavour" in csv_cols:
+                partial["flavour"] = row.get("flavour", "")
+            if "unit" in csv_cols:
+                partial["unit"] = row.get("unit", "") or "pcs"
+            if "units_per_box" in csv_cols:
+                partial["units_per_box"] = int(float(row.get("units_per_box") or 1))
+            if "base_price" in csv_cols:
+                partial["base_price"] = float(row.get("base_price") or 0)
+            if "msrp" in csv_cols:
+                partial["msrp"] = float(row.get("msrp")) if row.get("msrp") else None
+            if "distribution_price" in csv_cols:
+                partial["distribution_price"] = float(row.get("distribution_price")) if row.get("distribution_price") else None
+            if "wholesale_price" in csv_cols:
+                partial["wholesale_price"] = float(row.get("wholesale_price")) if row.get("wholesale_price") else None
+            if "stock" in csv_cols:
+                partial["stock"] = int(float(row.get("stock") or 0))
+            if "low_stock_threshold" in csv_cols:
+                partial["low_stock_threshold"] = int(float(row.get("low_stock_threshold") or 10))
+            if "active" in csv_cols:
+                partial["active"] = (row.get("active") or "1") not in ("0", "false", "False")
+            if "tiers" in csv_cols:
+                partial["tiers"] = _decode_tiers(row.get("tiers", ""))
+            if "variants" in csv_cols:
+                partial["variants"] = _decode_variants(row.get("variants", ""))
+
             existing = await db.products.find_one({"sku": sku}, {"_id": 0})
             if existing:
-                # Preserve images, id, created_at
-                payload["images"] = existing.get("images", [])
-                await db.products.update_one({"id": existing["id"]}, {"$set": payload})
+                # Partial update — only the columns from CSV are touched
+                await db.products.update_one({"id": existing["id"]}, {"$set": partial})
                 updated += 1
             else:
-                payload["id"] = str(uuid.uuid4())
-                payload["images"] = []
-                payload["created_at"] = iso(now_utc())
-                await db.products.insert_one(payload)
+                # New row needs at least a price; fill defaults for missing fields
+                full = {
+                    "id": str(uuid.uuid4()),
+                    "sku": sku,
+                    "barcode": "",
+                    "name": sku,
+                    "description": "",
+                    "category": "General",
+                    "flavour": "",
+                    "unit": "pcs",
+                    "units_per_box": 1,
+                    "base_price": 0.0,
+                    "msrp": None,
+                    "distribution_price": None,
+                    "wholesale_price": None,
+                    "stock": 0,
+                    "low_stock_threshold": 10,
+                    "active": True,
+                    "tiers": [],
+                    "variants": [],
+                    "images": [],
+                    "created_at": iso(now_utc()),
+                }
+                full.update(partial)
+                await db.products.insert_one(full)
                 created += 1
         except Exception as e:
             errors.append({"row": idx, "sku": (row.get("sku") if isinstance(row, dict) else "?") or "", "error": str(e)})
