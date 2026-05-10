@@ -10,7 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../../components/ui/select";
 import { toast } from "sonner";
-import { Plus } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 
 const REASONS = [
   { value: "manual_adjustment", label: "Manual adjustment" },
@@ -25,6 +25,7 @@ export default function StockMovements() {
   const [products, setProducts] = useState([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ product_id: "", qty_delta: "", reason: "stock_in", note: "" });
+  const [search, setSearch] = useState("");
 
   const load = () => api.get("/stock-movements").then((r) => setList(r.data));
   useEffect(() => {
@@ -50,7 +51,18 @@ export default function StockMovements() {
           <h1 className="font-display text-4xl tracking-tighter mt-1">Stock Movements</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">Audit trail of every stock change.</p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <div className="flex items-center gap-2">
+          <div className="relative w-72">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"/>
+            <Input
+              placeholder="Search SKU, product, reason, reference…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 h-10"
+              data-testid="stock-search"
+            />
+          </div>
+          <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button className="bg-[var(--primary)] hover:bg-[var(--primary-hover)]" data-testid="new-adjustment-button">
               <Plus size={16} className="mr-1.5"/>Adjust stock
@@ -88,6 +100,7 @@ export default function StockMovements() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <div className="surface-card overflow-hidden">
@@ -100,22 +113,40 @@ export default function StockMovements() {
             </tr>
           </thead>
           <tbody>
-            {list.map((m) => (
-              <tr key={m.id} className="border-b border-[var(--border)] last:border-0 hover:bg-black/[0.015]">
-                <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{formatDate(m.created_at)}</td>
-                <td className="px-4 py-3"><div className="font-medium">{m.name}</div><div className="text-xs font-mono text-[var(--text-muted)]">{m.sku}</div></td>
-                <td className="px-4 py-3 text-xs">{m.reason.replace(/_/g, " ")}</td>
-                <td className="px-4 py-3 font-mono text-xs text-[var(--text-muted)]">{m.reference || "—"}</td>
-                <td className="px-4 py-3 font-mono">
-                  <span className={m.qty_delta < 0 ? "text-[var(--danger)]" : "text-[var(--success)]"}>
-                    {m.qty_delta > 0 ? "+" : ""}{m.qty_delta}
-                  </span>
-                </td>
-                <td className="px-4 py-3 font-mono">{m.stock_after}</td>
-                <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{m.created_by_name}</td>
-              </tr>
-            ))}
-            {!list.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-[var(--text-muted)]">No movements yet.</td></tr>}
+            {(() => {
+              const term = search.trim().toLowerCase();
+              const filtered = !term ? list : list.filter((m) =>
+                [m.sku, m.name, m.reason, m.reference, m.note, m.created_by_name]
+                  .filter(Boolean)
+                  .join(" ")
+                  .toLowerCase()
+                  .includes(term)
+              );
+              return (
+                <>
+                  {filtered.map((m) => (
+                    <tr key={m.id} className="border-b border-[var(--border)] last:border-0 hover:bg-black/[0.015]">
+                      <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{formatDate(m.created_at)}</td>
+                      <td className="px-4 py-3"><div className="font-medium">{m.name}</div><div className="text-xs font-mono text-[var(--text-muted)]">{m.sku}</div></td>
+                      <td className="px-4 py-3 text-xs">{m.reason.replace(/_/g, " ")}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-[var(--text-muted)]">{m.reference || "—"}</td>
+                      <td className="px-4 py-3 font-mono">
+                        <span className={m.qty_delta < 0 ? "text-[var(--danger)]" : "text-[var(--success)]"}>
+                          {m.qty_delta > 0 ? "+" : ""}{m.qty_delta}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-mono">{m.stock_after}</td>
+                      <td className="px-4 py-3 text-xs text-[var(--text-muted)]">{m.created_by_name}</td>
+                    </tr>
+                  ))}
+                  {!filtered.length && (
+                    <tr><td colSpan={7} className="px-4 py-10 text-center text-[var(--text-muted)]">
+                      {term ? `No movements match "${search}".` : "No movements yet."}
+                    </td></tr>
+                  )}
+                </>
+              );
+            })()}
           </tbody>
         </table>
       </div>

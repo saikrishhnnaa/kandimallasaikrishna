@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, formatApiError, formatCurrency } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -17,6 +17,7 @@ import { useUsbScanner } from "../../hooks/useUsbScanner";
 
 export default function AgentNewOrder() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
   const [customerId, setCustomerId] = useState("");
@@ -29,16 +30,19 @@ export default function AgentNewOrder() {
   const handleScan = async (code) => {
     try {
       const { data } = await api.get(`/products/by-barcode/${encodeURIComponent(code)}`);
+      const product = data.product;
+      const variant = data.variant;
+      const matchKey = (it) => it.product_id === product.id && (it.variant_id || null) === (variant?.id || null);
       setItems((prev) => {
-        const idx = prev.findIndex((it) => it.product_id === data.id);
+        const idx = prev.findIndex(matchKey);
         if (idx >= 0) {
           const copy = [...prev];
           copy[idx] = { ...copy[idx], quantity: Number(copy[idx].quantity || 0) + 1 };
           return copy;
         }
-        return [...prev, { product_id: data.id, quantity: 1 }];
+        return [...prev, { product_id: product.id, variant_id: variant?.id || null, quantity: 1 }];
       });
-      toast.success(`Added: ${data.name}`);
+      toast.success(`Added: ${product.name}${variant ? " · " + variant.label : ""}`);
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
@@ -50,13 +54,30 @@ export default function AgentNewOrder() {
   };
   useEffect(() => { load(); }, []);
 
+  // Prefill from catalog query params
+  useEffect(() => {
+    const cidQ = searchParams.get("customer_id");
+    const itemsQ = searchParams.get("items");
+    if (cidQ) setCustomerId(cidQ);
+    if (itemsQ) {
+      try {
+        const parsed = JSON.parse(itemsQ);
+        if (Array.isArray(parsed)) {
+          setItems(parsed.map((i) => ({
+            product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity || 1),
+          })));
+        }
+      } catch (_) { /* ignore */ }
+    }
+  }, [searchParams]);
+
   useEffect(() => {
     if (!customerId || !items.length) { setPreview(null); return; }
     const valid = items.filter((i) => i.product_id && Number(i.quantity) > 0);
     if (!valid.length) { setPreview(null); return; }
     api.post("/pricing/preview", {
       customer_id: customerId,
-      items: valid.map((i) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
+      items: valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) })),
     }).then((r) => setPreview(r.data)).catch(() => setPreview(null));
   }, [customerId, items]);
 
@@ -77,8 +98,8 @@ export default function AgentNewOrder() {
     if (!valid.length) return toast.error("Add a product");
     try {
       const { data } = await api.post("/orders", {
-        customer_id: customerId, type: "order", notes: "",
-        items: valid.map((i) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
+        customer_id: customerId, type: "invoice", notes: "",
+        items: valid.map((i) => ({ product_id: i.product_id, variant_id: i.variant_id || null, quantity: Number(i.quantity) })),
       });
       toast.success(`${data.number} created`);
       nav("/agent/sales");
@@ -88,7 +109,7 @@ export default function AgentNewOrder() {
   return (
     <div className="p-4 pb-32" data-testid="agent-new-order">
       <p className="overline">Onsite</p>
-      <h1 className="font-display text-3xl tracking-tighter mt-1 mb-4">New Order</h1>
+      <h1 className="font-display text-3xl tracking-tighter mt-1 mb-4">New Invoice</h1>
 
       {/* Customer */}
       <div className="surface-card p-4 mb-3">
@@ -136,23 +157,39 @@ export default function AgentNewOrder() {
           </div>
         </div>
         <div className="space-y-2">
-          {items.map((it, idx) => (
-            <div key={idx} className="space-y-2 pb-2 border-b border-[var(--border)] last:border-0 last:pb-0">
-              <Select value={it.product_id} onValueChange={(v) => {
-                const arr = [...items]; arr[idx] = { ...arr[idx], product_id: v }; setItems(arr);
-              }}>
-                <SelectTrigger className="h-11"><SelectValue placeholder="Choose product"/></SelectTrigger>
-                <SelectContent>
-                  {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <div className="flex items-center gap-2">
-                <Input type="number" min="1" placeholder="Qty" value={it.quantity}
-                  onChange={(e) => { const arr = [...items]; arr[idx] = { ...arr[idx], quantity: e.target.value }; setItems(arr); }}/>
-                <Button variant="ghost" size="icon" onClick={() => setItems(items.filter((_, i) => i !== idx))}><Trash2 size={14}/></Button>
+          {items.map((it, idx) => {
+            const prod = products.find((p) => p.id === it.product_id);
+            const hasVariants = prod?.variants?.length > 0;
+            return (
+              <div key={idx} className="space-y-2 pb-2 border-b border-[var(--border)] last:border-0 last:pb-0">
+                <Select value={it.product_id} onValueChange={(v) => {
+                  const arr = [...items]; arr[idx] = { ...arr[idx], product_id: v, variant_id: null }; setItems(arr);
+                }}>
+                  <SelectTrigger className="h-11" data-testid={`agent-line-product-${idx}`}><SelectValue placeholder="Choose product"/></SelectTrigger>
+                  <SelectContent>
+                    {products.map((p) => <SelectItem key={p.id} value={p.id}><span className="font-mono text-xs mr-2">{p.sku}</span>{p.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {hasVariants && (
+                  <Select value={it.variant_id || ""} onValueChange={(v) => {
+                    const arr = [...items]; arr[idx] = { ...arr[idx], variant_id: v }; setItems(arr);
+                  }}>
+                    <SelectTrigger className="h-11" data-testid={`agent-line-variant-${idx}`}><SelectValue placeholder="Choose variant"/></SelectTrigger>
+                    <SelectContent>
+                      {prod.variants.map((v) => (
+                        <SelectItem key={v.id} value={v.id}>{v.label} · {v.stock} left</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <div className="flex items-center gap-2">
+                  <Input type="number" min="1" placeholder="Qty" value={it.quantity}
+                    onChange={(e) => { const arr = [...items]; arr[idx] = { ...arr[idx], quantity: e.target.value }; setItems(arr); }}/>
+                  <Button variant="ghost" size="icon" onClick={() => setItems(items.filter((_, i) => i !== idx))}><Trash2 size={14}/></Button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {!items.length && <div className="text-center py-6 text-sm text-[var(--text-muted)]">Tap "Add" to start.</div>}
         </div>
       </div>
@@ -161,12 +198,26 @@ export default function AgentNewOrder() {
       {preview && (
         <div className="surface-card p-4 mb-3">
           <p className="overline mb-2">Preview</p>
-          {preview.items.map((p) => (
-            <div key={p.product_id} className="flex justify-between text-sm py-1">
-              <span className="truncate">{p.name} × {p.quantity}</span>
+          {preview.items.map((p, i) => (
+            <div key={`${p.product_id}-${p.variant_id || "_"}-${i}`} className="flex justify-between text-sm py-1">
+              <span className="truncate">{p.name}{p.variant_label ? ` · ${p.variant_label}` : ""} × {p.quantity}</span>
               <span className="font-mono ml-2">{formatCurrency(p.line_total)}</span>
             </div>
           ))}
+          {(preview.tax_components || []).length > 0 && (
+            <div className="border-t border-[var(--border)] mt-2 pt-2 space-y-1">
+              <div className="flex justify-between text-xs text-[var(--text-muted)]">
+                <span>Subtotal</span>
+                <span className="font-mono">{formatCurrency(preview.subtotal)}</span>
+              </div>
+              {preview.tax_components.map((c, i) => (
+                <div key={i} className="flex justify-between text-xs text-[var(--text-muted)]">
+                  <span>{c.label} ({c.rate}%)</span>
+                  <span className="font-mono">{formatCurrency(c.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="border-t border-[var(--border)] mt-3 pt-3 flex justify-between font-display text-2xl tracking-tight">
             <span>Total</span>
             <span>{formatCurrency(preview.total)}</span>
@@ -176,7 +227,7 @@ export default function AgentNewOrder() {
 
       <div className="fixed bottom-20 left-0 right-0 max-w-[480px] mx-auto px-4">
         <Button onClick={submit} className="w-full h-12 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white text-base font-medium" data-testid="agent-submit-order">
-          Place Order {preview ? `· ${formatCurrency(preview.total)}` : ""}
+          Place Invoice {preview ? `· ${formatCurrency(preview.total)}` : ""}
         </Button>
       </div>
 

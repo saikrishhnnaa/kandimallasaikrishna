@@ -5,17 +5,20 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import os
+import io
+import csv
 import uuid
 import asyncio
 import logging
 import secrets
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Tuple
 
 import bcrypt
 import jwt
 import resend
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -42,6 +45,13 @@ if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
 app = FastAPI(title="Wholesale POS API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://po.d2fhwbk8gkegwf.amplifyapp.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
@@ -145,36 +155,56 @@ async def send_email(to: str, subject: str, html: str) -> bool:
 # Stock movements
 # -----------------------------------------------------------------------------
 async def apply_stock_change(
-    product_id: str, qty_delta: int, reason: str, reference: str, user: dict
+    product_id: str, qty_delta: int, reason: str, reference: str, user: dict,
+    variant_id: Optional[str] = None,
 ) -> Optional[dict]:
-    """Atomically increment stock and log a movement. Triggers low-stock alert."""
-    res = await db.products.find_one_and_update(
-        {"id": product_id},
-        {"$inc": {"stock": int(qty_delta)}},
-        return_document=True,
-        projection={"_id": 0},
-    )
-    if not res:
-        return None
+    """Atomically adjust product or variant stock and log a movement."""
+    if variant_id:
+        res = await db.products.find_one_and_update(
+            {"id": product_id, "variants.id": variant_id},
+            {"$inc": {"variants.$.stock": int(qty_delta)}},
+            return_document=True, projection={"_id": 0},
+        )
+        if not res:
+            return None
+        variant = next((v for v in res.get("variants", []) if v["id"] == variant_id), None)
+        if not variant:
+            return None
+        sku = variant["sku"]
+        name = f"{res['name']} · {variant['label']}"
+        stock_after = int(variant.get("stock", 0))
+        threshold = int(variant.get("low_stock_threshold", 10))
+    else:
+        res = await db.products.find_one_and_update(
+            {"id": product_id},
+            {"$inc": {"stock": int(qty_delta)}},
+            return_document=True, projection={"_id": 0},
+        )
+        if not res:
+            return None
+        sku = res.get("sku", "")
+        name = res.get("name", "")
+        stock_after = int(res.get("stock", 0))
+        threshold = int(res.get("low_stock_threshold", 10))
+
     await db.stock_movements.insert_one({
         "id": str(uuid.uuid4()),
         "product_id": product_id,
-        "sku": res.get("sku", ""),
-        "name": res.get("name", ""),
+        "variant_id": variant_id,
+        "sku": sku,
+        "name": name,
         "qty_delta": int(qty_delta),
         "reason": reason,
         "reference": reference or "",
-        "stock_after": int(res.get("stock", 0)),
+        "stock_after": stock_after,
         "created_by": user.get("id", "system"),
         "created_by_name": user.get("name", "System"),
         "created_at": iso(now_utc()),
     })
     if qty_delta < 0:
-        threshold = int(res.get("low_stock_threshold", 10))
-        cur = int(res.get("stock", 0))
-        prev = cur - int(qty_delta)
-        if cur <= threshold < prev:
-            asyncio.create_task(_low_stock_alert(res))
+        prev = stock_after - int(qty_delta)
+        if stock_after <= threshold < prev:
+            asyncio.create_task(_low_stock_alert({**res, "stock": stock_after, "name": name, "sku": sku, "low_stock_threshold": threshold}))
     return res
 
 
@@ -237,6 +267,24 @@ class PriceTier(BaseModel):
     price: float
 
 
+class Variant(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    label: str
+    sku: str
+    barcode: str = ""
+    price: float
+    stock: int = 0
+    low_stock_threshold: int = 10
+    active: bool = True
+
+
+class ProductImage(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    data_url: str  # data:image/...;base64,...
+    filename: str = ""
+    is_primary: bool = False
+
+
 class Product(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -245,9 +293,16 @@ class Product(BaseModel):
     name: str
     description: str = ""
     category: str = "General"
+    flavour: str = ""
     unit: str = "pcs"
+    units_per_box: int = 1
     base_price: float
+    msrp: Optional[float] = None
+    distribution_price: Optional[float] = None
+    wholesale_price: Optional[float] = None
     tiers: List[PriceTier] = []
+    variants: List[Variant] = []
+    images: List[ProductImage] = []
     stock: int = 0
     low_stock_threshold: int = 10
     active: bool = True
@@ -260,9 +315,16 @@ class ProductCreate(BaseModel):
     name: str
     description: str = ""
     category: str = "General"
+    flavour: str = ""
     unit: str = "pcs"
+    units_per_box: int = 1
     base_price: float
+    msrp: Optional[float] = None
+    distribution_price: Optional[float] = None
+    wholesale_price: Optional[float] = None
     tiers: List[PriceTier] = []
+    variants: List[Variant] = []
+    images: List[ProductImage] = []
     stock: int = 0
     low_stock_threshold: int = 10
 
@@ -273,12 +335,84 @@ class ProductUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
+    flavour: Optional[str] = None
     unit: Optional[str] = None
+    units_per_box: Optional[int] = None
     base_price: Optional[float] = None
+    msrp: Optional[float] = None
+    distribution_price: Optional[float] = None
+    wholesale_price: Optional[float] = None
     tiers: Optional[List[PriceTier]] = None
+    variants: Optional[List[Variant]] = None
+    images: Optional[List[ProductImage]] = None
     stock: Optional[int] = None
     low_stock_threshold: Optional[int] = None
     active: Optional[bool] = None
+
+
+class TaxComponent(BaseModel):
+    label: str
+    rate: float
+
+
+class TaxJurisdiction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    components: List[TaxComponent] = []
+    active: bool = True
+    created_at: str = Field(default_factory=lambda: iso(now_utc()))
+
+
+class TaxJurisdictionCreate(BaseModel):
+    name: str
+    components: List[TaxComponent] = []
+
+
+class TaxJurisdictionUpdate(BaseModel):
+    name: Optional[str] = None
+    components: Optional[List[TaxComponent]] = None
+    active: Optional[bool] = None
+
+
+class OrderTaxLine(BaseModel):
+    label: str
+    rate: float
+    amount: float
+
+
+# Cart Drafts (saved unfinished invoices)
+class DraftItem(BaseModel):
+    product_id: str
+    variant_id: Optional[str] = None
+    quantity: int
+
+
+class CartDraft(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    customer_id: Optional[str] = None
+    items: List[DraftItem] = []
+    notes: str = ""
+    created_by: str
+    created_by_name: str = ""
+    created_at: str = Field(default_factory=lambda: iso(now_utc()))
+    updated_at: str = Field(default_factory=lambda: iso(now_utc()))
+
+
+class CartDraftCreate(BaseModel):
+    name: str
+    customer_id: Optional[str] = None
+    items: List[DraftItem] = []
+    notes: str = ""
+
+
+class CartDraftUpdate(BaseModel):
+    name: Optional[str] = None
+    customer_id: Optional[str] = None
+    items: Optional[List[DraftItem]] = None
+    notes: Optional[str] = None
 
 
 class CustomerPrice(BaseModel):
@@ -295,6 +429,7 @@ class Customer(BaseModel):
     phone: str = ""
     address: str = ""
     tax_id: str = ""
+    default_tax_jurisdiction_id: Optional[str] = None
     credit_limit: float = 0.0
     credit_balance: float = 0.0
     payment_terms_days: int = 30
@@ -311,6 +446,7 @@ class CustomerCreate(BaseModel):
     phone: str = ""
     address: str = ""
     tax_id: str = ""
+    default_tax_jurisdiction_id: Optional[str] = None
     credit_limit: float = 0.0
     payment_terms_days: int = 30
     custom_prices: List[CustomerPrice] = []
@@ -324,6 +460,7 @@ class CustomerUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     tax_id: Optional[str] = None
+    default_tax_jurisdiction_id: Optional[str] = None
     credit_limit: Optional[float] = None
     payment_terms_days: Optional[int] = None
     custom_prices: Optional[List[CustomerPrice]] = None
@@ -333,13 +470,17 @@ class CustomerUpdate(BaseModel):
 
 class OrderItemIn(BaseModel):
     product_id: str
+    variant_id: Optional[str] = None
     quantity: int
+    unit_price_override: Optional[float] = None  # admin/employee can set a custom price per line
 
 
 class OrderItem(BaseModel):
     product_id: str
+    variant_id: Optional[str] = None
     sku: str
     name: str
+    variant_label: str = ""
     quantity: int
     unit_price: float
     line_total: float
@@ -378,6 +519,7 @@ class OrderCreate(BaseModel):
     notes: str = ""
     trade_ins: List[TradeInIn] = []
     credit_applied: float = 0.0
+    tax_jurisdiction_id: Optional[str] = None
 
 
 class OrderUpdate(BaseModel):
@@ -386,6 +528,7 @@ class OrderUpdate(BaseModel):
     notes: Optional[str] = None
     trade_ins: Optional[List[TradeInIn]] = None
     credit_applied: Optional[float] = None
+    tax_jurisdiction_id: Optional[str] = None
 
 
 class OrderOut(BaseModel):
@@ -400,6 +543,9 @@ class OrderOut(BaseModel):
     credit_applied: float = 0.0
     subtotal: float
     tax: float
+    tax_jurisdiction_id: Optional[str] = None
+    tax_jurisdiction_name: str = ""
+    tax_components: List[OrderTaxLine] = []
     total: float
     status: OrderStatus
     payment_status: PayStatus
@@ -441,12 +587,12 @@ class PaymentOut(BaseModel):
 # -----------------------------------------------------------------------------
 # Pricing logic
 # -----------------------------------------------------------------------------
-async def resolve_price(product: dict, customer: dict, quantity: int) -> float:
-    # 1. Customer-specific
+async def resolve_price(product: dict, customer: dict, quantity: int, variant: Optional[dict] = None) -> float:
+    # 1. Customer-specific (at product level — applies to all variants)
     for cp in customer.get("custom_prices", []) or []:
         if cp.get("product_id") == product["id"]:
             return float(cp["price"])
-    # 2. Tiered pricing — best matching tier (highest min_qty <= qty)
+    # 2. Tiered pricing — parent-level, applies uniformly across variants
     best_tier_price = None
     best_tier_qty = -1
     for t in product.get("tiers", []) or []:
@@ -456,6 +602,9 @@ async def resolve_price(product: dict, customer: dict, quantity: int) -> float:
             best_tier_price = float(t["price"])
     if best_tier_price is not None:
         return best_tier_price
+    # 3. Variant or product base price
+    if variant:
+        return float(variant["price"])
     return float(product["base_price"])
 
 
@@ -547,19 +696,31 @@ async def list_products(user: dict = Depends(get_current_user)):
     return await cursor.to_list(2000)
 
 
-@api_router.get("/products/by-barcode/{code}", response_model=Product)
+@api_router.get("/products/by-barcode/{code}")
 async def get_product_by_barcode(code: str, _: dict = Depends(get_current_user)):
     code = code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Empty barcode")
-    # Match either barcode or SKU (USB scanners often hold internal SKUs too)
+    # Match product (barcode or SKU)
     p = await db.products.find_one(
         {"$or": [{"barcode": code}, {"sku": code}], "active": True},
         {"_id": 0},
     )
-    if not p:
-        raise HTTPException(status_code=404, detail=f"No product matches barcode '{code}'")
-    return p
+    if p:
+        return {"product": p, "variant": None}
+    # Match variant inside any product
+    p2 = await db.products.find_one(
+        {"$or": [{"variants.barcode": code}, {"variants.sku": code}], "active": True},
+        {"_id": 0},
+    )
+    if p2:
+        variant = next(
+            (v for v in p2.get("variants", []) if v.get("barcode") == code or v.get("sku") == code),
+            None,
+        )
+        if variant:
+            return {"product": p2, "variant": variant}
+    raise HTTPException(status_code=404, detail=f"No product matches barcode '{code}'")
 
 
 @api_router.post("/products", response_model=Product)
@@ -595,6 +756,247 @@ async def delete_product(product_id: str, _: dict = Depends(require_role("admin"
 
 
 # -----------------------------------------------------------------------------
+# Products import / export (CSV, no images)
+# -----------------------------------------------------------------------------
+PRODUCT_CSV_FIELDS = [
+    "sku", "barcode", "name", "description", "category", "flavour", "unit", "units_per_box",
+    "base_price", "msrp", "distribution_price", "wholesale_price",
+    "stock", "low_stock_threshold", "active",
+    "tiers", "variants",
+]
+
+
+def _encode_tiers(tiers: List[dict]) -> str:
+    return "; ".join(f"{int(t['min_qty'])}:{float(t['price']):.2f}" for t in (tiers or []))
+
+
+def _decode_tiers(s: str) -> List[dict]:
+    out = []
+    for chunk in (s or "").split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if ":" not in chunk:
+            raise ValueError(f"Invalid tier '{chunk}' (expected min_qty:price)")
+        q, p = chunk.split(":", 1)
+        out.append({"min_qty": int(q.strip()), "price": float(p.strip())})
+    return out
+
+
+def _encode_variants(variants: List[dict]) -> str:
+    parts = []
+    for v in (variants or []):
+        parts.append("|".join([
+            v.get("label", ""),
+            v.get("sku", ""),
+            v.get("barcode", ""),
+            f"{float(v.get('price') or 0):.2f}",
+            str(int(v.get("stock") or 0)),
+            str(int(v.get("low_stock_threshold") or 10)),
+            "1" if v.get("active") is not False else "0",
+        ]))
+    return "; ".join(parts)
+
+
+def _decode_variants(s: str) -> List[dict]:
+    out = []
+    for chunk in (s or "").split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        cells = [c.strip() for c in chunk.split("|")]
+        if len(cells) < 4:
+            raise ValueError(f"Invalid variant '{chunk}' (need at least label|sku|barcode|price)")
+        cells += [""] * (7 - len(cells))
+        label, sku, barcode, price, stock, low, active = cells[:7]
+        out.append({
+            "id": str(uuid.uuid4()),
+            "label": label,
+            "sku": sku,
+            "barcode": barcode,
+            "price": float(price or 0),
+            "stock": int(stock or 0),
+            "low_stock_threshold": int(low or 10),
+            "active": (active or "1") not in ("0", "false", "False", ""),
+        })
+    return out
+
+
+@api_router.get("/products/export")
+async def export_products(_: dict = Depends(require_role("admin", "employee"))):
+    items = await db.products.find({}, {"_id": 0}).to_list(5000)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=PRODUCT_CSV_FIELDS)
+    w.writeheader()
+    for p in items:
+        def _f(k):
+            v = p.get(k)
+            return f"{float(v):.2f}" if v not in (None, "") else ""
+        w.writerow({
+            "sku": p.get("sku", ""),
+            "barcode": p.get("barcode", ""),
+            "name": p.get("name", ""),
+            "description": p.get("description", ""),
+            "category": p.get("category", ""),
+            "flavour": p.get("flavour", ""),
+            "unit": p.get("unit", ""),
+            "units_per_box": int(p.get("units_per_box") or 1),
+            "base_price": f"{float(p.get('base_price') or 0):.2f}",
+            "msrp": _f("msrp"),
+            "distribution_price": _f("distribution_price"),
+            "wholesale_price": _f("wholesale_price"),
+            "stock": int(p.get("stock") or 0),
+            "low_stock_threshold": int(p.get("low_stock_threshold") or 10),
+            "active": "1" if p.get("active", True) else "0",
+            "tiers": _encode_tiers(p.get("tiers") or []),
+            "variants": _encode_variants(p.get("variants") or []),
+        })
+    buf.seek(0)
+    fname = f"products-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@api_router.post("/products/import")
+async def import_products(file: UploadFile = File(...), _: dict = Depends(require_role("admin"))):
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a .csv file")
+    raw = (await file.read()).decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(raw))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV is empty")
+    csv_cols = {(c or "").strip().lower() for c in reader.fieldnames}
+    if "sku" not in csv_cols:
+        raise HTTPException(status_code=400, detail="CSV must contain a 'sku' column")
+
+    created = 0
+    updated = 0
+    errors: List[dict] = []
+    for idx, row in enumerate(reader, start=2):
+        try:
+            row = {(k or "").strip().lower(): (v if v is not None else "").strip() for k, v in row.items()}
+            sku = row.get("sku") or ""
+            if not sku:
+                raise ValueError("Missing SKU")
+
+            # Build partial payload: only include columns the CSV actually has
+            partial: dict = {"sku": sku}
+            if "barcode" in csv_cols:
+                partial["barcode"] = row.get("barcode", "")
+            if "name" in csv_cols:
+                partial["name"] = row.get("name", "") or sku
+            if "description" in csv_cols:
+                partial["description"] = row.get("description", "")
+            if "category" in csv_cols:
+                partial["category"] = row.get("category", "") or "General"
+            if "flavour" in csv_cols:
+                partial["flavour"] = row.get("flavour", "")
+            if "unit" in csv_cols:
+                partial["unit"] = row.get("unit", "") or "pcs"
+            if "units_per_box" in csv_cols:
+                partial["units_per_box"] = int(float(row.get("units_per_box") or 1))
+            if "base_price" in csv_cols:
+                partial["base_price"] = float(row.get("base_price") or 0)
+            if "msrp" in csv_cols:
+                partial["msrp"] = float(row.get("msrp")) if row.get("msrp") else None
+            if "distribution_price" in csv_cols:
+                partial["distribution_price"] = float(row.get("distribution_price")) if row.get("distribution_price") else None
+            if "wholesale_price" in csv_cols:
+                partial["wholesale_price"] = float(row.get("wholesale_price")) if row.get("wholesale_price") else None
+            if "stock" in csv_cols:
+                partial["stock"] = int(float(row.get("stock") or 0))
+            if "low_stock_threshold" in csv_cols:
+                partial["low_stock_threshold"] = int(float(row.get("low_stock_threshold") or 10))
+            if "active" in csv_cols:
+                partial["active"] = (row.get("active") or "1") not in ("0", "false", "False")
+            if "tiers" in csv_cols:
+                partial["tiers"] = _decode_tiers(row.get("tiers", ""))
+            if "variants" in csv_cols:
+                partial["variants"] = _decode_variants(row.get("variants", ""))
+
+            existing = await db.products.find_one({"sku": sku}, {"_id": 0})
+            if existing:
+                # Partial update — only the columns from CSV are touched
+                await db.products.update_one({"id": existing["id"]}, {"$set": partial})
+                updated += 1
+            else:
+                # New row needs at least a price; fill defaults for missing fields
+                full = {
+                    "id": str(uuid.uuid4()),
+                    "sku": sku,
+                    "barcode": "",
+                    "name": sku,
+                    "description": "",
+                    "category": "General",
+                    "flavour": "",
+                    "unit": "pcs",
+                    "units_per_box": 1,
+                    "base_price": 0.0,
+                    "msrp": None,
+                    "distribution_price": None,
+                    "wholesale_price": None,
+                    "stock": 0,
+                    "low_stock_threshold": 10,
+                    "active": True,
+                    "tiers": [],
+                    "variants": [],
+                    "images": [],
+                    "created_at": iso(now_utc()),
+                }
+                full.update(partial)
+                await db.products.insert_one(full)
+                created += 1
+        except Exception as e:
+            errors.append({"row": idx, "sku": (row.get("sku") if isinstance(row, dict) else "?") or "", "error": str(e)})
+
+    return {"created": created, "updated": updated, "errors": errors}
+
+
+# -----------------------------------------------------------------------------
+# Tax Jurisdictions
+# -----------------------------------------------------------------------------
+@api_router.get("/tax-jurisdictions", response_model=List[TaxJurisdiction])
+async def list_tax_jurisdictions(_: dict = Depends(get_current_user)):
+    cursor = db.tax_jurisdictions.find({}, {"_id": 0}).sort("created_at", -1)
+    return await cursor.to_list(500)
+
+
+@api_router.post("/tax-jurisdictions", response_model=TaxJurisdiction)
+async def create_tax_jurisdiction(body: TaxJurisdictionCreate, _: dict = Depends(require_role("admin"))):
+    j = TaxJurisdiction(**body.model_dump())
+    await db.tax_jurisdictions.insert_one(j.model_dump())
+    return j
+
+
+@api_router.patch("/tax-jurisdictions/{jurisdiction_id}", response_model=TaxJurisdiction)
+async def update_tax_jurisdiction(jurisdiction_id: str, body: TaxJurisdictionUpdate, _: dict = Depends(require_role("admin"))):
+    update = body.model_dump(exclude_unset=True)
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    if "components" in update:
+        update["components"] = [
+            c if isinstance(c, dict) else c.model_dump() for c in update["components"]
+        ]
+    res = await db.tax_jurisdictions.find_one_and_update(
+        {"id": jurisdiction_id}, {"$set": update}, return_document=True, projection={"_id": 0}
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail="Jurisdiction not found")
+    return res
+
+
+@api_router.delete("/tax-jurisdictions/{jurisdiction_id}")
+async def delete_tax_jurisdiction(jurisdiction_id: str, _: dict = Depends(require_role("admin"))):
+    res = await db.tax_jurisdictions.update_one({"id": jurisdiction_id}, {"$set": {"active": False}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Jurisdiction not found")
+    return {"ok": True}
+
+
+# -----------------------------------------------------------------------------
 # Customers
 # -----------------------------------------------------------------------------
 @api_router.get("/customers", response_model=List[Customer])
@@ -612,7 +1014,7 @@ async def create_customer(body: CustomerCreate, _: dict = Depends(require_role("
 
 @api_router.patch("/customers/{customer_id}", response_model=Customer)
 async def update_customer(customer_id: str, body: CustomerUpdate, _: dict = Depends(require_role("admin", "employee"))):
-    update = body.model_dump(exclude_none=True)
+    update = body.model_dump(exclude_unset=True)
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
     if "custom_prices" in update:
@@ -654,7 +1056,7 @@ def _prefix_for(t: str) -> str:
 
 
 async def _compute_lines(items_in, customer: dict) -> tuple:
-    """Resolve unit prices and line totals for products."""
+    """Resolve unit prices and line totals for products + variants."""
     items: List[dict] = []
     subtotal = 0.0
     for it in items_in or []:
@@ -665,12 +1067,33 @@ async def _compute_lines(items_in, customer: dict) -> tuple:
         qty = int(d["quantity"])
         if qty <= 0:
             raise HTTPException(status_code=400, detail="Quantity must be positive")
-        unit_price = await resolve_price(product, customer, qty)
+        variant = None
+        variant_id = d.get("variant_id")
+        if product.get("variants"):
+            if not variant_id:
+                raise HTTPException(status_code=400, detail=f"{product['name']} has variants — choose one")
+            variant = next((v for v in product["variants"] if v["id"] == variant_id), None)
+            if not variant:
+                raise HTTPException(status_code=400, detail="Variant not found")
+        elif variant_id:
+            variant_id = None
+        override = d.get("unit_price_override")
+        if override is not None and override != "":
+            try:
+                unit_price = round(float(override), 2)
+                if unit_price < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"Invalid price override for {product['name']}")
+        else:
+            unit_price = await resolve_price(product, customer, qty, variant)
         line_total = round(unit_price * qty, 2)
         items.append({
             "product_id": product["id"],
-            "sku": product["sku"],
+            "variant_id": variant_id,
+            "sku": variant["sku"] if variant else product["sku"],
             "name": product["name"],
+            "variant_label": variant["label"] if variant else "",
             "quantity": qty,
             "unit_price": unit_price,
             "line_total": line_total,
@@ -729,6 +1152,30 @@ async def _adjust_customer_credit(customer_id: str, delta: float, current: dict,
     })
 
 
+async def _resolve_tax_jurisdiction(jurisdiction_id: Optional[str], customer: dict) -> Optional[dict]:
+    """Resolve which jurisdiction applies. None or unset => use customer's default. Empty string => no tax."""
+    if jurisdiction_id == "":
+        return None
+    target_id = jurisdiction_id if jurisdiction_id else customer.get("default_tax_jurisdiction_id")
+    if not target_id:
+        return None
+    j = await db.tax_jurisdictions.find_one({"id": target_id, "active": True}, {"_id": 0})
+    return j
+
+
+def _compute_tax(taxable: float, jurisdiction: Optional[dict]) -> Tuple[List[dict], float, str, Optional[str]]:
+    if not jurisdiction or taxable <= 0:
+        return [], 0.0, "", (jurisdiction or {}).get("id")
+    components: List[dict] = []
+    total = 0.0
+    for c in jurisdiction.get("components", []) or []:
+        rate = float(c.get("rate") or 0.0)
+        amount = round(taxable * rate / 100.0, 2)
+        components.append({"label": c["label"], "rate": rate, "amount": amount})
+        total += amount
+    return components, round(total, 2), jurisdiction.get("name", ""), jurisdiction.get("id")
+
+
 async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
     customer = await db.customers.find_one({"id": body.customer_id}, {"_id": 0})
     if not customer:
@@ -741,7 +1188,11 @@ async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
     available_credit = float(customer.get("credit_balance") or 0.0)
     if credit_applied > available_credit + 0.001:
         raise HTTPException(status_code=400, detail=f"Customer has only {available_credit:.2f} credit available")
-    total = round(max(subtotal - trade_in_total - credit_applied, 0.0), 2)
+    taxable = round(max(subtotal - trade_in_total - credit_applied, 0.0), 2)
+    body_dump = body.model_dump(exclude_unset=True)
+    jurisdiction = await _resolve_tax_jurisdiction(body_dump.get("tax_jurisdiction_id"), customer)
+    tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+    total = round(taxable + tax_total, 2)
     commission_rate = float(current.get("commission_rate") or 0.0) if current["role"] == "sales_agent" else 0.0
     commission = round(total * commission_rate / 100.0, 2)
     terms = int(customer.get("payment_terms_days", 30))
@@ -757,7 +1208,10 @@ async def _build_order_doc(body: OrderCreate, current: dict) -> dict:
         "trade_in_total": trade_in_total,
         "credit_applied": credit_applied,
         "subtotal": subtotal,
-        "tax": 0.0,
+        "tax": tax_total,
+        "tax_jurisdiction_id": jur_id,
+        "tax_jurisdiction_name": jur_name,
+        "tax_components": tax_components,
         "total": total,
         "status": "draft" if body.type == "quote" else "confirmed",
         "payment_status": "unpaid",
@@ -783,20 +1237,33 @@ async def _check_stock(items: List[dict]) -> None:
         p = await db.products.find_one({"id": it["product_id"]}, {"_id": 0})
         if not p:
             continue
-        if int(p.get("stock", 0)) < int(it["quantity"]):
-            short.append(f"{p['name']} (have {p.get('stock', 0)}, need {it['quantity']})")
+        if it.get("variant_id"):
+            v = next((vv for vv in p.get("variants", []) if vv["id"] == it["variant_id"]), None)
+            if not v:
+                continue
+            if int(v.get("stock", 0)) < int(it["quantity"]):
+                short.append(f"{p['name']} · {v['label']} (have {v.get('stock', 0)}, need {it['quantity']})")
+        else:
+            if int(p.get("stock", 0)) < int(it["quantity"]):
+                short.append(f"{p['name']} (have {p.get('stock', 0)}, need {it['quantity']})")
     if short:
         raise HTTPException(status_code=400, detail="Out of stock: " + "; ".join(short))
 
 
 async def _apply_decrements(items: List[dict], reference: str, user: dict) -> None:
     for it in items:
-        await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_created", reference, user)
+        await apply_stock_change(
+            it["product_id"], -int(it["quantity"]), "order_created", reference, user,
+            variant_id=it.get("variant_id"),
+        )
 
 
 async def _apply_restocks(items: List[dict], reference: str, user: dict, reason: str = "order_deleted") -> None:
     for it in items:
-        await apply_stock_change(it["product_id"], int(it["quantity"]), reason, reference, user)
+        await apply_stock_change(
+            it["product_id"], int(it["quantity"]), reason, reference, user,
+            variant_id=it.get("variant_id"),
+        )
 
 
 async def _apply_trade_in_restocks(trade_ins: List[dict], reference: str, user: dict, sign: int = 1) -> None:
@@ -830,6 +1297,63 @@ def _agent_filter(current: dict) -> dict:
     if current["role"] == "sales_agent":
         return {"created_by": current["id"]}
     return {}
+
+
+@api_router.get("/orders/export")
+async def export_orders(
+    type: Optional[OrderType] = None,
+    include_deleted: bool = False,
+    current: dict = Depends(require_role("admin", "employee")),
+):
+    q: dict = _agent_filter(current)
+    if type:
+        q["type"] = type
+    if not include_deleted:
+        q["$or"] = [{"deleted_at": None}, {"deleted_at": {"$exists": False}}]
+    items = await db.orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    fields = [
+        "number", "type", "created_at", "customer_name", "created_by_name",
+        "subtotal", "trade_in_total", "credit_applied", "tax",
+        "tax_jurisdiction_name", "total", "status", "payment_status",
+        "amount_paid", "balance_due", "due_date", "items_summary", "notes",
+    ]
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields)
+    w.writeheader()
+    for o in items:
+        items_summary = "; ".join(
+            f"{it.get('sku') or ''} {it.get('name','')}"
+            + (f" · {it.get('variant_label')}" if it.get('variant_label') else "")
+            + f" × {int(it.get('quantity') or 0)} @ {float(it.get('unit_price') or 0):.2f}"
+            for it in (o.get("items") or [])
+        )
+        w.writerow({
+            "number": o.get("number", ""),
+            "type": o.get("type", ""),
+            "created_at": o.get("created_at", ""),
+            "customer_name": o.get("customer_name", ""),
+            "created_by_name": o.get("created_by_name", ""),
+            "subtotal": f"{float(o.get('subtotal') or 0):.2f}",
+            "trade_in_total": f"{float(o.get('trade_in_total') or 0):.2f}",
+            "credit_applied": f"{float(o.get('credit_applied') or 0):.2f}",
+            "tax": f"{float(o.get('tax') or 0):.2f}",
+            "tax_jurisdiction_name": o.get("tax_jurisdiction_name", ""),
+            "total": f"{float(o.get('total') or 0):.2f}",
+            "status": o.get("status", ""),
+            "payment_status": o.get("payment_status", ""),
+            "amount_paid": f"{float(o.get('amount_paid') or 0):.2f}",
+            "balance_due": f"{float(o.get('balance_due') or 0):.2f}",
+            "due_date": o.get("due_date") or "",
+            "items_summary": items_summary,
+            "notes": o.get("notes", ""),
+        })
+    buf.seek(0)
+    fname = f"invoices-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @api_router.get("/orders", response_model=List[OrderOut])
@@ -922,7 +1446,7 @@ async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends
         await _check_stock(new_items)
         # Decrement new
         for it in new_items:
-            await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_edited", order["number"], current)
+            await apply_stock_change(it["product_id"], -int(it["quantity"]), "order_edited", order["number"], current, variant_id=it.get("variant_id"))
         # Apply new trade-in restocks
         await _apply_trade_in_restocks(new_trade_ins, order["number"], current, sign=+1)
 
@@ -930,7 +1454,22 @@ async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends
     if delta_credit_applied != 0:
         await _adjust_customer_credit(customer_id, -delta_credit_applied, current, "credit_adjusted_on_edit", order["number"])
 
-    total = round(max(subtotal - trade_in_total - new_credit, 0.0), 2)
+    # Tax: only recompute if explicitly provided OR if customer changed and original used customer default
+    body_dump = body.model_dump(exclude_unset=True)
+    taxable = round(max(subtotal - trade_in_total - new_credit, 0.0), 2)
+    if "tax_jurisdiction_id" in body_dump:
+        jurisdiction = await _resolve_tax_jurisdiction(body_dump.get("tax_jurisdiction_id"), customer)
+        tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+    else:
+        # keep existing jurisdiction, just rescale amounts proportionally to new taxable
+        existing_id = order.get("tax_jurisdiction_id")
+        if existing_id:
+            jurisdiction = await db.tax_jurisdictions.find_one({"id": existing_id}, {"_id": 0})
+            tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+        else:
+            tax_components, tax_total, jur_name, jur_id = [], 0.0, "", None
+
+    total = round(taxable + tax_total, 2)
     amount_paid = float(order.get("amount_paid", 0.0))
     balance_due = round(max(total - amount_paid, 0.0), 2) if order["type"] == "invoice" else 0.0
     pay_status = "paid" if balance_due <= 0.001 and amount_paid > 0 else ("partial" if amount_paid > 0 else "unpaid")
@@ -945,6 +1484,10 @@ async def update_order(order_id: str, body: OrderUpdate, current: dict = Depends
         "trade_in_total": trade_in_total,
         "credit_applied": new_credit,
         "subtotal": subtotal,
+        "tax": tax_total,
+        "tax_jurisdiction_id": jur_id,
+        "tax_jurisdiction_name": jur_name,
+        "tax_components": tax_components,
         "total": total,
         "balance_due": balance_due,
         "payment_status": pay_status,
@@ -1361,21 +1904,30 @@ class PublicProduct(BaseModel):
     base_price: float
     has_bulk_pricing: bool
     barcode: str = ""
+    primary_image: Optional[str] = None
+    images: List[str] = []
+
+
+def _public_product_payload(p: dict) -> dict:
+    imgs = p.get("images") or []
+    primary = next((i.get("data_url") for i in imgs if i.get("is_primary")), None)
+    if not primary and imgs:
+        primary = imgs[0].get("data_url")
+    return {
+        "id": p["id"], "sku": p["sku"], "name": p["name"],
+        "description": p.get("description", ""), "category": p.get("category", "General"),
+        "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
+        "has_bulk_pricing": bool(p.get("tiers")),
+        "barcode": p.get("barcode", ""),
+        "primary_image": primary,
+        "images": [i.get("data_url") for i in imgs if i.get("data_url")],
+    }
 
 
 @api_router.get("/public/products", response_model=List[PublicProduct])
 async def public_list_products(_: None = Depends(require_public_key)):
     items = await db.products.find({"active": True}, {"_id": 0}).to_list(2000)
-    return [
-        {
-            "id": p["id"], "sku": p["sku"], "name": p["name"],
-            "description": p.get("description", ""), "category": p.get("category", "General"),
-            "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
-            "has_bulk_pricing": bool(p.get("tiers")),
-            "barcode": p.get("barcode", ""),
-        }
-        for p in items
-    ]
+    return [_public_product_payload(p) for p in items]
 
 
 @api_router.get("/public/products/{product_id}", response_model=PublicProduct)
@@ -1383,13 +1935,7 @@ async def public_get_product(product_id: str, _: None = Depends(require_public_k
     p = await db.products.find_one({"id": product_id, "active": True}, {"_id": 0})
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
-    return {
-        "id": p["id"], "sku": p["sku"], "name": p["name"],
-        "description": p.get("description", ""), "category": p.get("category", "General"),
-        "unit": p.get("unit", "pcs"), "base_price": float(p["base_price"]),
-        "has_bulk_pricing": bool(p.get("tiers")),
-        "barcode": p.get("barcode", ""),
-    }
+    return _public_product_payload(p)
 
 
 @api_router.get("/settings/integration")
@@ -1560,22 +2106,44 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
         if not p:
             continue
         qty = int(it.get("quantity", 1))
-        unit = await resolve_price(p, customer, qty)
+        variant = None
+        variant_id = it.get("variant_id")
+        if p.get("variants") and variant_id:
+            variant = next((v for v in p["variants"] if v["id"] == variant_id), None)
+        override = it.get("unit_price_override")
+        if override is not None and override != "":
+            try:
+                unit = round(float(override), 2)
+                if unit < 0:
+                    unit = 0.0
+            except (TypeError, ValueError):
+                unit = await resolve_price(p, customer, qty, variant)
+        else:
+            unit = await resolve_price(p, customer, qty, variant)
         line = round(unit * qty, 2)
         subtotal += line
         out.append({
             "product_id": p["id"],
-            "sku": p["sku"],
+            "variant_id": variant_id,
+            "sku": variant["sku"] if variant else p["sku"],
             "name": p["name"],
+            "variant_label": variant["label"] if variant else "",
             "quantity": qty,
             "unit_price": unit,
             "line_total": line,
-            "stock": p.get("stock", 0),
+            "stock": (variant or p).get("stock", 0),
         })
     trade_ins, trade_in_total = _compute_trade_ins(trade_ins_in)
     available_credit = float(customer.get("credit_balance") or 0.0)
     credit_applied = round(max(0.0, min(credit_applied, available_credit)), 2)
-    total = round(max(round(subtotal, 2) - trade_in_total - credit_applied, 0.0), 2)
+    taxable = round(max(round(subtotal, 2) - trade_in_total - credit_applied, 0.0), 2)
+    jurisdiction_id = body.get("tax_jurisdiction_id") if "tax_jurisdiction_id" in body else None
+    if "tax_jurisdiction_id" in body:
+        jurisdiction = await _resolve_tax_jurisdiction(jurisdiction_id, customer)
+    else:
+        jurisdiction = await _resolve_tax_jurisdiction(None, customer)
+    tax_components, tax_total, jur_name, jur_id = _compute_tax(taxable, jurisdiction)
+    total = round(taxable + tax_total, 2)
     return {
         "items": out,
         "trade_ins": trade_ins,
@@ -1583,8 +2151,70 @@ async def preview_pricing(body: dict, _: dict = Depends(get_current_user)):
         "credit_applied": credit_applied,
         "available_credit": available_credit,
         "subtotal": round(subtotal, 2),
+        "tax": tax_total,
+        "tax_jurisdiction_id": jur_id,
+        "tax_jurisdiction_name": jur_name,
+        "tax_components": tax_components,
         "total": total,
     }
+
+
+# -----------------------------------------------------------------------------
+# Cart Drafts (saved unfinished invoices, scoped per user)
+# -----------------------------------------------------------------------------
+@api_router.get("/cart-drafts", response_model=List[CartDraft])
+async def list_cart_drafts(current: dict = Depends(get_current_user)):
+    cursor = db.cart_drafts.find({"created_by": current["id"]}, {"_id": 0}).sort("updated_at", -1)
+    return await cursor.to_list(200)
+
+
+@api_router.post("/cart-drafts", response_model=CartDraft)
+async def create_cart_draft(body: CartDraftCreate, current: dict = Depends(get_current_user)):
+    name = (body.name or "").strip() or f"Draft {iso(now_utc())[:16]}"
+    draft = CartDraft(
+        name=name,
+        customer_id=body.customer_id,
+        items=body.items,
+        notes=body.notes,
+        created_by=current["id"],
+        created_by_name=current.get("name", ""),
+    )
+    await db.cart_drafts.insert_one(draft.model_dump())
+    return draft
+
+
+@api_router.get("/cart-drafts/{draft_id}", response_model=CartDraft)
+async def get_cart_draft(draft_id: str, current: dict = Depends(get_current_user)):
+    d = await db.cart_drafts.find_one({"id": draft_id, "created_by": current["id"]}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return d
+
+
+@api_router.patch("/cart-drafts/{draft_id}", response_model=CartDraft)
+async def update_cart_draft(draft_id: str, body: CartDraftUpdate, current: dict = Depends(get_current_user)):
+    update = body.model_dump(exclude_unset=True)
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    if "items" in update:
+        update["items"] = [i if isinstance(i, dict) else i.model_dump() for i in update["items"]]
+    update["updated_at"] = iso(now_utc())
+    res = await db.cart_drafts.find_one_and_update(
+        {"id": draft_id, "created_by": current["id"]},
+        {"$set": update},
+        return_document=True, projection={"_id": 0},
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return res
+
+
+@api_router.delete("/cart-drafts/{draft_id}")
+async def delete_cart_draft(draft_id: str, current: dict = Depends(get_current_user)):
+    res = await db.cart_drafts.delete_one({"id": draft_id, "created_by": current["id"]})
+    if not res.deleted_count:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return {"ok": True}
 
 
 # -----------------------------------------------------------------------------
@@ -1608,12 +2238,20 @@ async def on_startup():
     await db.orders.create_index("deleted_at")
     await db.payments.create_index("order_id")
     await db.order_audit.create_index("order_id")
+    await db.tax_jurisdictions.create_index("name")
+    await db.cart_drafts.create_index("created_by")
+    await db.cart_drafts.create_index("updated_at")
 
     # Backfill: ensure credit_balance + deleted_at fields exist
     await db.customers.update_many({"credit_balance": {"$exists": False}}, {"$set": {"credit_balance": 0.0}})
+    await db.customers.update_many({"default_tax_jurisdiction_id": {"$exists": False}}, {"$set": {"default_tax_jurisdiction_id": None}})
+    await db.products.update_many({"images": {"$exists": False}}, {"$set": {"images": []}})
+    await db.products.update_many({"flavour": {"$exists": False}}, {"$set": {"flavour": ""}})
+    await db.products.update_many({"units_per_box": {"$exists": False}}, {"$set": {"units_per_box": 1}})
     await db.orders.update_many({"deleted_at": {"$exists": False}}, {"$set": {"deleted_at": None}})
     await db.orders.update_many({"trade_ins": {"$exists": False}}, {"$set": {"trade_ins": [], "trade_in_total": 0.0, "credit_applied": 0.0}})
     await db.orders.update_many({"agent_can_edit": {"$exists": False}}, {"$set": {"agent_can_edit": False}})
+    await db.orders.update_many({"tax_jurisdiction_id": {"$exists": False}}, {"$set": {"tax_jurisdiction_id": None, "tax_jurisdiction_name": "", "tax_components": []}})
 
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@wholesalepos.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")

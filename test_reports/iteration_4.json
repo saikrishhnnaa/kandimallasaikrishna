@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 4: Verified the 'Invoices-only' refactor (removal of Quote/Order CRUD UI) plus the two bugs flagged in iteration_3 — (a) AgentNewOrder URL prefill, (b) Catalog qty controlled-input warning. All required UI changes are in place and the agent prefill bug is FIXED. Backend regression suite (test_variants + test_taxes + test_product_images) re-run end-to-end, 36/36 passed (1 skipped public-catalog test, pre-existing).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/agent/catalog product grid", "issues": ["Leftover seed TEST_ products with placeholder/empty thumbnails still present (cosmetic, noted last iteration). E.g. 'TEST No Image', 'TEST_NoTaxCust' customers. Suggest a one-off cleanup pass before launch."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_variants.py",
+    "/app/backend/tests/test_taxes.py",
+    "/app/backend/tests/test_product_images.py",
+    "/app/test_reports/pytest/regression_iter4.xml"
+  ],
+  "verified_acceptance": [
+    "Sidebar label = 'Invoices' (data-testid nav-invoices present, nav-orders absent)",
+    "/admin/orders heading = 'Invoices'; status tabs status-active/paid/unpaid/deleted/all all present; no tab-quote/tab-order/tab-invoice/tab-all leftover; New button label = 'New Invoice'",
+    "/admin/orders/new heading = 'New Invoice'; data-testid order-type-select REMOVED; submit button text = 'Create invoice'",
+    "/admin/catalog catalog-type-select REMOVED",
+    "/agent/catalog catalog-type-select REMOVED",
+    "Catalog qty <Input> no longer triggers React controlled/uncontrolled warning (0 warnings captured while typing into qty)",
+    "AgentNewOrder PREFILL FIX VERIFIED: navigating to /agent/new-order?customer_id=...&items=[{product_id,quantity:3}] correctly populates customer dropdown ('TEST_NoTaxCust_d07ae9') and line-item qty (3); product select shows the prefilled product. Submit button reads 'Place Invoice · $3.00'.",
+    "Agent submit button text = 'Place Invoice · $X.XX'; heading = 'New Invoice'",
+    "Backend regression: test_variants (14), test_taxes (19), test_product_images (3) → 36 passed / 1 skipped, exit 0"
+  ],
+  "action_items": [
+    "OPTIONAL CLEANUP: remove leftover TEST_ products / TEST_ customers from seed DB so production catalog doesn't show placeholder rows."
+  ],
+  "critical_code_review_comments": [
+    "OrderDetail.jsx still renders the type label at line 89 (`<p className=\"overline\">{order.type}</p>`). For an existing legacy 'quote' or 'order' record opened directly via URL, this will display 'quote'/'order' — fine per the spec ('preserve existing data') but worth a future UX pass.",
+    "AgentNewOrder prefill effect at lines 57-72 mirrors OrderNew.jsx correctly (good DRY parity); however neither page resets state when searchParams clear — minor, only affects in-app navigation between catalog and form, not user-facing.",
+    "Catalog.jsx hardcodes `const type = \"invoice\"` and still passes it as a URL param at line 149 — harmless (admin/agent prefill code ignores `type` param now) but the param is dead weight; can be dropped for cleanliness."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (36/36 regression pass)", "frontend": "100% (all 14 acceptance checks pass for the Invoices-only refactor + both prior bugs fixed)"},
+  "test_credentials": "Used admin@wholesalepos.com/admin123 and agent@wholesalepos.com/password123 from /app/memory/test_credentials.md",
+  "seed_data_creation": "None. No TEST_ records created this iteration.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Invoices-only refactor accepted. If new doc-types are reintroduced, watch for leftover hardcoded `const type = \"invoice\"` in OrderNew.jsx, AgentNewOrder.jsx and Catalog.jsx and re-add a Select. Both prior catalog bugs are confirmed fixed; no follow-up needed.",
+  "rca of the issue": "Both iteration_3 bugs were addressed cleanly. (1) AgentNewOrder.jsx now imports useSearchParams and has a useEffect that reads customer_id + items JSON and seeds state on mount — verified working. (2) Catalog.jsx qty Input now uses only `value={qtyPick[p.id] ?? \"1\"}` (no defaultValue), eliminating the React controlled/uncontrolled console warning."
+}

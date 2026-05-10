@@ -27,10 +27,10 @@ export default function AgentHome() {
         <Tile icon={TrendingUp} label="Total revenue" value={formatCurrency(stats.total_revenue)}/>
         <Tile icon={Wallet} label="Commission" value={formatCurrency(stats.total_commission)} sub={`@ ${stats.commission_rate}%`}/>
         <Tile icon={ShoppingBag} label="Total orders" value={stats.total_orders}/>
-        <Link to="/agent/new-order" className="rounded-xl bg-black text-white p-4 flex flex-col justify-between" data-testid="agent-quick-new-order">
+        <Link to="/agent/catalog" className="rounded-xl bg-black text-white p-4 flex flex-col justify-between" data-testid="agent-quick-new-order">
           <p className="overline text-white/80">Quick</p>
           <div className="flex items-end justify-between">
-            <div className="font-display text-lg tracking-tight leading-tight">New<br/>order</div>
+            <div className="font-display text-lg tracking-tight leading-tight">New<br/>invoice</div>
             <ArrowRight size={20}/>
           </div>
         </Link>

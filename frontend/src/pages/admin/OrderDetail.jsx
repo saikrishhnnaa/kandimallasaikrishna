@@ -42,12 +42,6 @@ export default function OrderDetail() {
   };
   useEffect(() => { load(); }, [id]);
 
-  const convert = async (target) => {
-    try { const { data } = await api.post(`/orders/${id}/convert`, null, { params: { target } });
-      toast.success(`Converted to ${data.number}`); nav(`/admin/orders/${data.id}`); }
-    catch (e) { toast.error(formatApiError(e)); }
-  };
-
   const recordPayment = async () => {
     try { await api.post("/payments", { order_id: id, amount: Number(pay.amount), method: pay.method, reference: pay.reference, notes: pay.notes });
       toast.success("Payment recorded"); setPayOpen(false); setPay({ amount: "", method: "cash", reference: "", notes: "" }); load(); }
@@ -81,7 +75,6 @@ export default function OrderDetail() {
   };
 
   if (!order) return <div className="p-8 overline">Loading…</div>;
-  const canConvert = (order.type === "quote") || (order.type === "order");
   const isEmployee = user.role === "admin" || user.role === "employee";
   const isDeleted = !!order.deleted_at;
 
@@ -117,15 +110,6 @@ export default function OrderDetail() {
             <Button variant="outline" onClick={emailInvoice} data-testid="email-invoice-button">
               <Mail size={14} className="mr-1.5"/>Email
             </Button>
-          )}
-          {!isDeleted && canConvert && order.type === "quote" && isEmployee && (
-            <>
-              <Button variant="outline" onClick={() => convert("order")} data-testid="convert-order-button">→ Order</Button>
-              <Button variant="outline" onClick={() => convert("invoice")} data-testid="convert-invoice-button">→ Invoice</Button>
-            </>
-          )}
-          {!isDeleted && order.type === "order" && isEmployee && (
-            <Button variant="outline" onClick={() => convert("invoice")} data-testid="convert-invoice-button">→ Invoice</Button>
           )}
           {!isDeleted && order.type === "invoice" && isEmployee && order.payment_status !== "paid" && (
             <Dialog open={payOpen} onOpenChange={setPayOpen}>
@@ -238,7 +222,7 @@ export default function OrderDetail() {
             {order.items.map((it, i) => (
               <tr key={i} className="border-b border-[var(--border)] last:border-0">
                 <td className="px-4 py-3 font-mono text-xs">{it.sku}</td>
-                <td className="px-4 py-3">{it.name}</td>
+                <td className="px-4 py-3">{it.name}{it.variant_label ? <span className="text-[var(--text-muted)] ml-2 text-xs">· {it.variant_label}</span> : null}</td>
                 <td className="px-4 py-3 font-mono">{it.quantity}</td>
                 <td className="px-4 py-3 font-mono">{formatCurrency(it.unit_price)}</td>
                 <td className="px-4 py-3 font-mono text-right">{formatCurrency(it.line_total)}</td>
@@ -260,6 +244,14 @@ export default function OrderDetail() {
                 <td className="px-4 py-2 text-right font-mono text-[var(--primary)]">− {formatCurrency(order.credit_applied)}</td>
               </tr>
             )}
+            {(order.tax_components || []).map((c, i) => (
+              <tr key={`tax-${i}`}>
+                <td colSpan={4} className="px-4 py-2 text-right text-sm text-[var(--text-muted)]">
+                  {c.label} ({c.rate}%) {order.tax_jurisdiction_name ? <span className="text-[10px] ml-1">· {order.tax_jurisdiction_name}</span> : null}
+                </td>
+                <td className="px-4 py-2 text-right font-mono">{formatCurrency(c.amount)}</td>
+              </tr>
+            ))}
             <tr className="bg-black/[0.04]">
               <td colSpan={4} className="px-4 py-3 text-right overline">Total</td>
               <td className="px-4 py-3 text-right font-display text-xl">{formatCurrency(order.total)}</td>

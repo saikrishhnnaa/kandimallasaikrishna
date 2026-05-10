@@ -1,0 +1,53 @@
+{
+  "summary": "End-to-end UI testing of the new Catalog feature for admin/employee (/admin/catalog) and sales agent (/agent/catalog). Validated sidebar entry, product grid, search, filters (category/min/max/in-stock), sort, variant gating, cart sheet, qty inc/dec/remove, customer + doc-type selection, pricing preview, inline checkout (creates order + navigates to detail), and 'Edit in form first' (URL prefill into OrderNew). Admin flow fully functional. Agent inline checkout works. Found ONE FUNCTIONAL BUG: agent 'Edit in form first' fails to prefill because AgentNewOrder.jsx ignores URL query params.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AgentNewOrder",
+        "issue": "Agent flow: 'Edit in form first' from /agent/catalog navigates to /agent/new-order?customer_id=...&type=...&items=<json> but the page does NOT read useSearchParams. Result: customer dropdown shows 'Choose customer' (empty) and items section shows 'Tap Add to start' — nothing pre-filled. Admin equivalent (OrderNew.jsx lines 58-73) reads searchParams correctly; AgentNewOrder.jsx must mirror this logic.",
+        "selector": "/agent/new-order URL params",
+        "priority": "HIGH"
+      },
+      {
+        "component": "Catalog qty input",
+        "issue": "React console warning: 'contains an input of type number with both value and defaultValue props.' Source: /app/frontend/src/pages/Catalog.jsx line ~386 — Input has both defaultValue=\"1\" and value={qtyPick[p.id] || ''}. Remove defaultValue (or use placeholder + controlled value only).",
+        "selector": "[data-testid^=\"catalog-qty-\"]",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Agent: Catalog -> Edit in form first -> AgentNewOrder",
+        "issue": "Customer, document type, and line items not prefilled because AgentNewOrder.jsx never imports/uses useSearchParams. User has to re-enter everything they already chose in catalog cart.",
+        "affected_selectors": ["/agent/new-order?customer_id=...&type=...&items=..."]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "/admin/catalog product grid",
+        "issues": ["TEST_ Image Product / TEST_ Image Replace cards show solid black squares (1x1 PNGs from prior test seed). Cosmetic only — main agent already noted these are leftover seed data; consider cleanup script to remove TEST_ products from seed DB or replace with proper placeholder."]
+      }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "FIX: Update /app/frontend/src/pages/agent/AgentNewOrder.jsx to read useSearchParams (customer_id, type, items) and prefill state on mount — mirror logic in /app/frontend/src/pages/admin/OrderNew.jsx lines 58-73.",
+    "MINOR: In /app/frontend/src/pages/Catalog.jsx, remove `defaultValue=\"1\"` from the qty <Input> (line ~386) since `value` is already provided — eliminates the React controlled/uncontrolled warning. Use placeholder=\"1\" alone.",
+    "OPTIONAL: Clean up seed leftover TEST_ products with 1×1 black PNG thumbnails."
+  ],
+  "critical_code_review_comments": [
+    "AgentNewOrder.jsx is missing the URL prefill logic added to OrderNew.jsx — same Catalog component sends query params to both routes but only admin handles them. This breaks one of the four required flow combinations.",
+    "Catalog.jsx qty Input mixes controlled (value) and uncontrolled (defaultValue) props, generating a React warning on every product card render.",
+    "Catalog.jsx uses naive Number() coercion on min/max price filters; non-numeric junk silently becomes NaN and filters everything out. Consider isFinite() guard, but low priority.",
+    "Catalog.jsx fetches /tax-jurisdictions on mount even for sales_agent role, where employee/agent typically gets 401 — currently silently caught (.catch(()=>{})), which is fine but expected console noise."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only requested)", "frontend": "94% (15 of 16 flows pass; agent edit-in-form prefill is broken)"},
+  "test_credentials": "Used: admin@wholesalepos.com/admin123, agent@wholesalepos.com/password123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None new. Created 2 throwaway sales orders during inline-checkout testing (one as admin → SO-#### with Premium Widget; one as agent → SO-00054 TEST VarCust) using existing customers. No TEST_ prefix orders created.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Admin catalog flow (search/filter/sort/cart/inline-checkout/edit-in-form) is solid — re-test only the agent prefill fix once main agent updates AgentNewOrder.jsx. Existing test_variants.py / test_taxes.py / test_product_images.py were not re-run this iteration but main agent indicated they still pass.",
+  "rca of the issue": "AgentNewOrder.jsx (/app/frontend/src/pages/agent/AgentNewOrder.jsx) does not import useSearchParams from react-router-dom and has no useEffect that reads customer_id / type / items from window.location.search. The new shared Catalog component (Catalog.jsx line 152) routes agents to '/agent/new-order' with the cart serialized as URL params — but only admin's OrderNew.jsx handles those params. Reproduction: login as agent → /agent/catalog → add product → open cart → pick customer → click 'Edit in form first' → arrives at /agent/new-order?customer_id=...&items=... with empty form. Fix: copy lines 57-73 of OrderNew.jsx (the else-branch prefill) into AgentNewOrder.jsx's mount useEffect."
+}

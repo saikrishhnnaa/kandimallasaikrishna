@@ -89,15 +89,68 @@
 - Sales agent /agent/sales: each order shows a 🔒 **Locked** badge by default; when an admin unlocks an order, a ✏️ **Edit** button appears, opens `/agent/orders/:id/edit` (mobile-friendly form, full edit capabilities — items, qty, trade-ins, credit, notes). Top-of-list banner shows "N order(s) unlocked for editing".
 - All existing edit-time guarantees (stock reconciliation, credit refund/re-apply, audit) apply identically when the agent saves.
 
+### v1.6 — Product Variants (sizes / flavours) (2026-05-09)
+- New `Variant` schema (id, label, sku, barcode, price, stock, low_stock_threshold, active). Each Product holds `variants: List[Variant] = []`.
+- **Pricing rule** (per spec 2i):
+  - Each variant has its own price.
+  - Bulk tiers + customer-specific prices stay at the **parent product** level and apply uniformly across all variants.
+- Order line items now carry `variant_id` + `variant_label`. Stock check / decrement / restock target the specific variant via `db.products.update_one({"id": pid, "variants.id": vid}, {"$inc": {"variants.$.stock": delta}})`.
+- Out-of-stock errors include the variant label: e.g. "Premium Cola · 1 L (have 0, need 5)".
+- `GET /api/products/by-barcode/{code}` now returns `{product, variant?}` — also matches variant SKUs and barcodes.
+- Frontend
+  - **Products dialog** — new "Variants (sizes / flavours)" section with grid editor (label, SKU, barcode, price, stock per variant). Free-text labels.
+  - **Products list** — shows `from $X.XX` pricing and `N variants · M tiers` summary; total stock = sum of variants.
+  - **Order form (admin + agent)** — when a product has variants, a second Select appears showing `Label · N left` per variant. Required before adding to cart.
+  - **Barcode scan** auto-adds the correct variant when the scanned code matches a variant SKU/barcode.
+  - **OrderDetail / OrderPrint** lines show `Product Name · Variant Label`.
+  - Stock movements log uses "Product · Variant" naming for variant changes.
+- **2026-02 hotfix**: `PATCH /api/orders/{id}` now passes `variant_id` when re-decrementing edited line items so variant stock reconciles correctly (was decrementing parent `product.stock`). Verified by `/app/backend/tests/test_variants.py` (14/14 passing). Added `data-testid="agent-line-product-{idx}"` and `agent-line-variant-{idx}` on `AgentNewOrder.jsx` for parity with admin OrderNew.
+
+### v1.7 — Tax Jurisdictions & Product Images (2026-02)
+- **Tax jurisdictions** (composite, tax-exclusive):
+  - New collection `tax_jurisdictions` `{id, name, components: [{label, rate}], active}`. CRUD at `/api/tax-jurisdictions` (admin write, any auth read; DELETE soft-archives).
+  - `customers.default_tax_jurisdiction_id` — picked by default on every order for that customer.
+  - `orders.tax_jurisdiction_id`, `tax_jurisdiction_name`, `tax_components: [{label, rate, amount}]`, `tax` (sum). Override per order: omit field → use customer default; `""` → explicit no tax; specific id → override.
+  - Compute: `taxable = max(subtotal − trade_in_total − credit_applied, 0)` → tax = taxable × Σrate%. Total = taxable + tax.
+  - Each component appears as a separate line on OrderDetail, OrderPrint, and the agent preview.
+- **Product images** (multiple, base64 in MongoDB):
+  - `Product.images: [{id, data_url, filename, is_primary}]` with star-as-primary UI; client-side compression via `lib/imageUtils.compressToDataUrl` (max 800px, JPEG q=0.78).
+  - Primary thumbnail in product list; `/api/public/products[/:id]` returns `primary_image` and `images[]`.
+- 22/22 + 14/14 variants regression all pass.
+
+### v1.8 — Catalog & Invoices-only (2026-02)
+- **Catalog page** (`/admin/catalog` and `/agent/catalog`, all roles): visual product grid with primary image, search, filters (category / price min-max / in-stock), sort (name / price / newest), per-product variant select + qty + Add. Right-side cart sheet with line-level qty controls, customer + tax preview, and two checkout flows: inline create OR "Edit in form first" (URL-prefills `/{admin,agent}/orders/new?customer_id=…&items=[…]`).
+- **Invoices-only**: removed all create-side UI for `quote` and `order` document types. Sidebar entry renamed to "Invoices". `OrderNew`, `AgentNewOrder`, and `Catalog` always create `type="invoice"`. `OrderDetail` no longer shows quote→order/invoice convert buttons. Orders list filters by `?type=invoice` and shows status tabs only (Active / Paid / Unpaid / Deleted / All). Backend untouched — historical quote/order documents remain in the DB for reference.
+- **Bugfixes**:
+  - `AgentNewOrder.jsx` now reads `customer_id` and `items` from URL params and prefills state (catalog `Edit in form first` flow on agent now works).
+  - `Catalog.jsx` qty Input no longer mixes `value` + `defaultValue` (controlled-input warning gone).
+- **Tests**: iteration 3 verified catalog flows; iteration 4 verified invoices-only refactor + both bugfixes; full backend regression (variants + taxes + product images) re-runs at 36/36 green.
+- **Tax jurisdictions** (composite, tax-exclusive):
+  - New collection `tax_jurisdictions` `{id, name, components: [{label, rate}], active}`. CRUD at `/api/tax-jurisdictions` (admin write, any auth read; DELETE soft-archives).
+  - `customers.default_tax_jurisdiction_id` — picked by default on every order for that customer.
+  - `orders.tax_jurisdiction_id`, `tax_jurisdiction_name`, `tax_components: [{label, rate, amount}]`, `tax` (sum). Override per order: omit field → use customer default; `""` → explicit no tax; specific id → override.
+  - Compute: `taxable = max(subtotal − trade_in_total − credit_applied, 0)` → tax = taxable × Σrate%. Total = taxable + tax.
+  - Each component appears as a separate line on OrderDetail, OrderPrint, and the agent preview (e.g. "CGST (9%) 18.00 / SGST (9%) 18.00").
+  - Pricing preview returns `tax_components`, `tax`, `total` for live recompute in the order form.
+  - Admin page at `/admin/tax` with grid editor for components and total-rate display.
+- **Product images** (multiple, base64 in MongoDB):
+  - `Product.images: [{id, data_url, filename, is_primary}]`. `is_primary` enforced (exactly one when present).
+  - Upload UI in `/admin/products` dialog: file input → client-side compress via `lib/imageUtils.compressToDataUrl` (canvas, max 800px, JPEG q=0.78). Star icon to set primary, X to remove.
+  - Products list shows the primary thumbnail in a new first column.
+  - Public catalog `/api/public/products[/:id]` returns `primary_image` (data URL) and `images: [data_url, …]`.
+- Tests: `/app/backend/tests/test_taxes.py` and `/app/backend/tests/test_product_images.py` cover CRUD, override semantics, composite math, trade-in/credit reduction of taxable base, image persistence and replacement. 22/22 + 14/14 variants regression all pass.
+
 ## Backlog (Prioritised)
-- **P1** Print-friendly invoice / PDF download
 - **P1** Customer portal (their own quotes/invoices) — paves way for website integration
-- **P1** Public read-only product catalog API for the company website to consume
+- **P1** Wire company website to `/api/public/products` (set PUBLIC_API_KEY)
 - **P2** Generate barcodes/labels for products
 - **P2** Email/WhatsApp share invoice links
 - **P2** Inventory adjustments log + transfer-between-warehouses
 - **P2** Stripe / Razorpay online invoice payments
-- **P3** Multi-currency, taxes per jurisdiction, bilingual UI
+- **P2** Per-variant low-stock dashboard widget
+- **P2** Server-side image size cap (defence-in-depth; client compression already in place)
+- **P3** Multi-currency, bilingual UI
+- **P3** Refactor `server.py` (~1900 lines) into modular routers
 
 ## Test Credentials
 See `/app/memory/test_credentials.md`.

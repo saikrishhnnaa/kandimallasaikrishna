@@ -11,17 +11,21 @@ import {
   BarChart3,
   Boxes,
   Plug,
+  Percent,
+  ShoppingBag,
   LogOut,
 } from "lucide-react";
 
 const NAV = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true, roles: ["admin", "employee"] },
-  { to: "/admin/orders", label: "Orders", icon: ShoppingCart, roles: ["admin", "employee"] },
+  { to: "/admin/catalog", label: "Catalog", icon: ShoppingBag, roles: ["admin", "employee"] },
+  { to: "/admin/orders", label: "Invoices", icon: ShoppingCart, roles: ["admin", "employee"] },
   { to: "/admin/products", label: "Products", icon: Package, roles: ["admin", "employee"] },
   { to: "/admin/customers", label: "Customers", icon: UsersIcon, roles: ["admin", "employee"] },
   { to: "/admin/stock-movements", label: "Stock Log", icon: Boxes, roles: ["admin", "employee"] },
   { to: "/admin/users", label: "Team", icon: Shield, roles: ["admin"] },
   { to: "/admin/reports", label: "Reports", icon: BarChart3, roles: ["admin"] },
+  { to: "/admin/tax", label: "Tax", icon: Percent, roles: ["admin"] },
   { to: "/admin/integration", label: "Integration", icon: Plug, roles: ["admin"] },
 ];
 
