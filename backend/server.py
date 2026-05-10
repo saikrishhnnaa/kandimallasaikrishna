@@ -44,7 +44,8 @@ APP_URL = os.environ.get("APP_URL", "").rstrip("/")
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
-app = FastAPI(title="Wholesale POS API")app.add_middleware(
+app = FastAPI(title="Wholesale POS API")
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
